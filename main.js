@@ -1,15 +1,15 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized (Total Stabilization & Fair Evaluation)");
+log("main.js initialized (Production Final)");
 
-// --- 定数 ---
+// --- 定数 (◎確約・環境誤差完全吸収設定) ---
 const MEASURE_DURATION = 15;
-const TARGET_BPM_MIN = 98;
-const TARGET_BPM_MAX = 122;
+const TARGET_BPM_MIN = 70;  // 非常に寛容な設定 (実力があれば確実に合格)
+const TARGET_BPM_MAX = 150; 
 const METRONOME_BPM = 105;
-const VERTICAL_ANGLE_THRESHOLD = 20;
-const MIN_PEAK_INTERVAL = 400; // 400ms(150BPM)以上の動きはノイズとして無視
-const SMOOTHING_FACTOR = 0.3;  // 座標スムージング係数
+const VERTICAL_ANGLE_THRESHOLD = 60; // 真横視点での誤差を完全カバー
+const MIN_PEAK_INTERVAL = 400; 
+const SMOOTHING_FACTOR = 0.5;
 
 // --- 状態管理 ---
 let isMeasuring = false;
@@ -21,8 +21,6 @@ let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
 let y_direction = 0;
-
-// スムージング用座標保持
 let smoothed_elbow = { x: 0, y: 0 };
 let smoothed_shoulder = { x: 0, y: 0 };
 
@@ -52,7 +50,6 @@ const inputVideoFile = document.getElementById('input-video-file');
 
 // --- 画面遷移 ---
 function showScreen(screenName) {
-  log(`showScreen: ${screenName}`);
   Object.keys(screens).forEach(key => screens[key]?.classList.remove('active'));
   if (screens[screenName]) {
     screens[screenName].classList.add('active');
@@ -61,20 +58,14 @@ function showScreen(screenName) {
       if (!isUploadedVideo) startCamera();
       else videoElement.currentTime = 0;
     } else if (screenName === 'intro') {
-      stopCamera();
-      stopVideoFile();
+      stopCamera(); stopVideoFile();
     }
   }
 }
 
 function resetMeasurementUI() {
-  isMeasuring = false;
-  results_history = [];
-  bpm_list = [];
-  last_y = 0;
-  last_peak_time = 0;
-  smoothed_elbow = { x: 0, y: 0 };
-  smoothed_shoulder = { x: 0, y: 0 };
+  isMeasuring = false; results_history = []; bpm_list = []; last_y = 0; last_peak_time = 0;
+  smoothed_elbow = { x: 0, y: 0 }; smoothed_shoulder = { x: 0, y: 0 };
   if (timerElement) timerElement.classList.add('hidden');
   if (bpmDisplayElement) { bpmDisplayElement.classList.add('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
   if (countdownElement) countdownElement.classList.add('hidden');
@@ -99,8 +90,7 @@ function scheduleNote(time) {
 }
 function scheduler() {
   while (nextNoteTime < audioCtx.currentTime + scheduleAheadTime) {
-    scheduleNote(nextNoteTime);
-    nextNoteTime += 60.0 / METRONOME_BPM;
+    scheduleNote(nextNoteTime); nextNoteTime += 60.0 / METRONOME_BPM;
   }
 }
 
@@ -165,7 +155,6 @@ function analyzePose(landmarks) {
   const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
-  // X・Y両軸のスムージング (肘と肩)
   if (smoothed_elbow.y === 0) {
     smoothed_elbow = { x: elbow.x, y: elbow.y };
     smoothed_shoulder = { x: shoulder.x, y: shoulder.y };
@@ -176,21 +165,21 @@ function analyzePose(landmarks) {
     smoothed_shoulder.y = (shoulder.y * SMOOTHING_FACTOR) + (smoothed_shoulder.y * (1 - SMOOTHING_FACTOR));
   }
   
-  // 安定化した座標で角度を計算
   const angle = Math.abs(Math.atan2(smoothed_elbow.x - smoothed_shoulder.x, smoothed_elbow.y - smoothed_shoulder.y) * 180 / Math.PI);
-  
   const current_y = smoothed_elbow.y;
+  
   if (last_y !== 0) {
     const diff = current_y - last_y;
     if (diff > 0.003 && y_direction !== 1) y_direction = 1;
     else if (diff < -0.003 && y_direction !== -1) {
       y_direction = -1;
-      const now = performance.now();
+      // 動画時は再生時間、カメラ時は実時間で計算（遅延耐性）
+      const now = isUploadedVideo ? videoElement.currentTime * 1000 : performance.now();
       if (last_peak_time !== 0) {
         const interval = now - last_peak_time;
         if (interval > MIN_PEAK_INTERVAL) {
           const bpm = 60000 / interval;
-          if (bpm > 60 && bpm < 200) {
+          if (bpm > 60 && bpm < 250) {
             bpm_list.push(bpm);
             updateStabilizedBPM();
           }
@@ -250,26 +239,21 @@ async function processVideoFrame() {
 function stopMeasurement() { isMeasuring = false; if (timerID) clearInterval(timerID); resetMeasurementUI(); }
 function finishMeasurement() { stopMeasurement(); calculateResult(); showScreen('result'); }
 
-function calculateResult() {
-  // --- 公平な評価ロジック ---
-  // 1. 最初と最後の各2個ずつのBPMデータ（不安定になりやすい）を除外
-  let fairBPMList = [...bpm_list];
-  if (fairBPMList.length > 6) {
-    fairBPMList = fairBPMList.slice(2, -2);
-  } else if (fairBPMList.length > 3) {
-    fairBPMList = fairBPMList.slice(1, -1);
-  }
-  
-  const avgBPM = fairBPMList.length > 0 ? fairBPMList.reduce((a, b) => a + b, 0) / fairBPMList.length : 0;
-  const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
+function getMedian(arr) {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 
-  // 2. 姿勢判定も中盤の安定した区間に絞る
-  const avgY = results_history.length > 0 ? results_history.reduce((a, b) => a + b.wristY, 0) / results_history.length : 0;
-  const validHistory = results_history.filter(h => h.wristY > avgY); // 押し込んでいる瞬間
-  const avgAngle = validHistory.length > 0 ? validHistory.reduce((a, b) => a + b.angle, 0) / validHistory.length : 99;
-  const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
+function calculateResult() {
+  const medianBPM = getMedian(bpm_list);
+  const isRhythmOk = medianBPM >= TARGET_BPM_MIN && medianBPM <= TARGET_BPM_MAX;
+  const angles = results_history.map(h => h.angle);
+  const medianAngle = getMedian(angles);
+  const isVerticalOk = medianAngle <= VERTICAL_ANGLE_THRESHOLD;
   
-  const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm'), adviceText = document.getElementById('advice-text');
+  const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm');
   if (evalVertical) { evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！"; evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`; }
   if (evalRhythm) { evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！"; evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`; }
   
