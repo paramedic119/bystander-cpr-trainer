@@ -161,7 +161,16 @@
       #timer {
         position: absolute; top: 1rem; right: 1rem;
         background: rgba(0, 0, 0, 0.6); padding: 0.4rem 1rem; border-radius: 2rem;
-        font-weight: bold; font-size: 1rem;
+        font-weight: bold; font-size: 1rem; z-index: 10;
+      }
+
+      #current-bpm-display {
+        position: absolute; top: 1rem; left: 1rem;
+        background: rgba(74, 222, 128, 0.2); 
+        border: 1px solid var(--primary-color);
+        padding: 0.4rem 1rem; border-radius: 2rem;
+        font-weight: bold; font-size: 1rem; color: var(--primary-color);
+        z-index: 10;
       }
 
       #metronome-visual {
@@ -251,6 +260,7 @@
           <div id="status-overlay">
             <div id="countdown" class="hidden">3</div>
             <div id="timer" class="hidden">00:15</div>
+            <div id="current-bpm-display" class="hidden">-- BPM</div>
             <div id="metronome-visual" class="hidden"></div>
             <div id="processing-overlay" class="hidden">解析中...</div>
           </div>

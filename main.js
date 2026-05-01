@@ -1,13 +1,14 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized (Elbow tracking mode)");
+log("main.js initialized (Enhanced Rhythm Logic)");
 
 // --- 定数 ---
 const MEASURE_DURATION = 15;
-const TARGET_BPM_MIN = 100;
-const TARGET_BPM_MAX = 120;
+const TARGET_BPM_MIN = 98; // 許容範囲を少し広げる (100 -> 98)
+const TARGET_BPM_MAX = 122; // 許容範囲を少し広げる (120 -> 122)
 const METRONOME_BPM = 105;
 const VERTICAL_ANGLE_THRESHOLD = 15;
+const MIN_PEAK_INTERVAL = 300; // 300ms(200BPM)以下の動きはノイズとして無視
 
 // --- 状態管理 ---
 let currentState = 'intro';
@@ -39,6 +40,7 @@ const videoElement = document.getElementById('input-video');
 const canvasElement = document.getElementById('output-canvas');
 const canvasCtx = canvasElement ? canvasElement.getContext('2d') : null;
 const timerElement = document.getElementById('timer');
+const bpmDisplayElement = document.getElementById('current-bpm-display');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
 const instructionText = document.getElementById('instruction-text');
@@ -75,6 +77,10 @@ function resetMeasurementUI() {
   last_y = 0;
   last_peak_time = 0;
   if (timerElement) timerElement.classList.add('hidden');
+  if (bpmDisplayElement) {
+    bpmDisplayElement.classList.add('hidden');
+    bpmDisplayElement.innerText = "-- BPM";
+  }
   if (countdownElement) countdownElement.classList.add('hidden');
   ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'].forEach(id => {
     const el = document.getElementById(id);
@@ -171,23 +177,32 @@ function onResults(results) {
 }
 
 function analyzePose(landmarks) {
-  // 肘（Elbow）を使用: 13 (左), 14 (右)
   const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
-  // 垂直性の判定（肩から肘の角度）
   const angle = Math.abs(Math.atan2(elbow.x - shoulder.x, elbow.y - shoulder.y) * 180 / Math.PI);
-  
   const current_y = elbow.y;
+  
   if (last_y !== 0) {
     const diff = current_y - last_y;
-    if (diff > 0.002 && y_direction !== 1) y_direction = 1;
-    else if (diff < -0.002 && y_direction !== -1) {
+    if (diff > 0.002 && y_direction !== 1) {
+      y_direction = 1;
+    } else if (diff < -0.002 && y_direction !== -1) {
       y_direction = -1;
-      const now = Date.now();
+      const now = performance.now(); // Date.now() ではなく performance.now() を使用
       if (last_peak_time !== 0) {
-        const bpm = 60000 / (now - last_peak_time);
-        if (bpm > 60 && bpm < 200) bpm_list.push(bpm);
+        const interval = now - last_peak_time;
+        // 300ms(200BPM)以下の極端に短い間隔は二重検知（ノイズ）として無視
+        if (interval > MIN_PEAK_INTERVAL) {
+          const bpm = 60000 / interval;
+          if (bpm > 60 && bpm < 200) {
+            bpm_list.push(bpm);
+            // リアルタイム表示を更新
+            if (bpmDisplayElement) {
+              bpmDisplayElement.innerText = `${Math.round(bpm)} BPM`;
+            }
+          }
+        }
       }
       last_peak_time = now;
     }
@@ -202,9 +217,7 @@ function flashMetronome() {
 }
 
 async function startMeasurement() {
-  log("startMeasurement called");
-  initAudio();
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  initAudio(); if (audioCtx.state === 'suspended') await audioCtx.resume();
   ['btn-start', 'btn-back-to-intro-from-measure', 'btn-switch-camera'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
   if (!isUploadedVideo) {
     if (countdownElement) countdownElement.classList.remove('hidden');
@@ -214,6 +227,10 @@ async function startMeasurement() {
   document.getElementById('btn-stop')?.classList.remove('hidden');
   isMeasuring = true; startTime = Date.now();
   if (timerElement) timerElement.classList.remove('hidden');
+  if (bpmDisplayElement) {
+    bpmDisplayElement.classList.remove('hidden');
+    bpmDisplayElement.innerText = "-- BPM";
+  }
   nextNoteTime = audioCtx.currentTime; timerID = setInterval(scheduler, 25.0);
   if (isUploadedVideo) {
     videoElement.currentTime = 0;
@@ -251,12 +268,16 @@ function calculateResult() {
   const avgY = results_history.length > 0 ? results_history.reduce((a, b) => a + b.wristY, 0) / results_history.length : 0;
   const validAngles = results_history.filter(h => h.wristY > avgY).map(h => h.angle);
   const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
+  
+  // 判定基準をわずかに広げる (98 - 122)
   const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
   const avgAngle = validAngles.length > 0 ? validAngles.reduce((a, b) => a + b, 0) / validAngles.length : 99;
   const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
+  
   const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm'), adviceText = document.getElementById('advice-text');
   if (evalVertical) { evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！"; evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`; }
   if (evalRhythm) { evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！"; evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`; }
+  
   if (isRhythmOk && isVerticalOk) {
     if (rankElement) rankElement.innerText = "◎"; if (rankTextElement) rankTextElement.innerText = "完璧です！素晴らしい！";
     if (window.confetti) window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
