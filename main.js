@@ -10,6 +10,7 @@ const VERTICAL_ANGLE_THRESHOLD = 15;
 // --- 状態管理 ---
 let isMeasuring = false;
 let isUploadedVideo = false;
+let currentFacingMode = 'user'; // 'user' (イン) または 'environment' (アウト)
 let startTime = 0;
 let results_history = [];
 let metronomeInterval = null;
@@ -47,7 +48,6 @@ function showScreen(screenName) {
       startCamera();
     }
   } else {
-    // 計測画面以外では全てを停止
     if (screenName !== 'measure') {
       stopCamera();
       stopVideoFile();
@@ -63,10 +63,7 @@ let camera = null;
 function initPose() {
   if (pose) return;
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
-  if (!PoseClass) {
-    console.error('MediaPipe Pose class not found');
-    return;
-  }
+  if (!PoseClass) return;
 
   pose = new PoseClass({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -87,24 +84,29 @@ function startCamera() {
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass || !pose) return;
 
-  // 以前の動画ソースをクリア
+  // エラーリスナーを一旦解除
+  videoElement.onerror = null;
   videoElement.pause();
   videoElement.srcObject = null;
   videoElement.src = "";
   videoElement.style.display = 'none';
 
-  if (!camera) {
-    camera = new CameraClass(videoElement, {
-      onFrame: async () => {
-        if (pose && !isUploadedVideo) await pose.send({ image: videoElement });
-      },
-      width: 640,
-      height: 480
-    });
+  if (camera) {
+    camera.stop();
   }
+
+  camera = new CameraClass(videoElement, {
+    onFrame: async () => {
+      if (pose && !isUploadedVideo) await pose.send({ image: videoElement });
+    },
+    width: 640,
+    height: 480,
+    facingMode: currentFacingMode
+  });
+  
   camera.start().catch(err => {
-    console.error('Camera start error:', err);
-    alert('カメラの起動に失敗しました。カメラの使用を許可してください。');
+    console.error('Camera Error:', err);
+    // カメラアクセス失敗時のフォールバック
   });
 }
 
@@ -114,35 +116,39 @@ function stopCamera() {
   }
 }
 
+function switchCamera() {
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+  if (!isUploadedVideo) {
+    startCamera();
+  }
+}
+
 async function startVideoFile(file) {
   isUploadedVideo = true;
   initPose();
-  
-  // 既存のカメラを停止
   stopCamera();
   
-  // 以前のソースをクリア
   videoElement.pause();
   videoElement.srcObject = null;
   
+  // 動画読み込み時のみエラーリスナーを登録
+  videoElement.onerror = () => {
+    if (isUploadedVideo) {
+      alert('動画の読み込みに失敗しました。');
+      isUploadedVideo = false;
+    }
+  };
+  
   const url = URL.createObjectURL(file);
   videoElement.src = url;
-  videoElement.muted = true; // ブラウザポリシー対策
+  videoElement.muted = true;
   
-  // 読み込み完了を待つ
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
-    instructionText.innerText = "動画の準備ができました。";
+    instructionText.innerText = "動画を読み込みました。";
     processingOverlay.classList.add('hidden');
-    
-    // Canvasの初期リサイズ
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
-  };
-
-  videoElement.onerror = () => {
-    alert('動画の読み込みに失敗しました。');
-    isUploadedVideo = false;
   };
   
   videoElement.load();
@@ -151,6 +157,7 @@ async function startVideoFile(file) {
 function stopVideoFile() {
   if (isUploadedVideo) {
     videoElement.pause();
+    videoElement.onerror = null; // リスナー解除
     if (videoElement.src) {
       URL.revokeObjectURL(videoElement.src);
       videoElement.src = "";
@@ -163,7 +170,6 @@ function stopVideoFile() {
 function onResults(results) {
   if (!results.image) return;
 
-  // キャンバスサイズの動的調整
   const w = results.image.width;
   const h = results.image.height;
   if (w && h && (canvasElement.width !== w || canvasElement.height !== h)) {
@@ -192,11 +198,9 @@ function analyzePose(landmarks) {
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
-  // 垂直性の判定
   const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
   results_history.push({ angle, wristY: wrist.y, time: Date.now() });
 
-  // リズム判定
   const current_y = wrist.y;
   if (last_y !== 0) {
     const diff = current_y - last_y;
@@ -223,14 +227,15 @@ function flashMetronome() {
   setTimeout(() => metronomeVisual.classList.add('hidden'), 100);
 }
 
-// --- 計測コントロール ---
 async function startMeasurement() {
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
+  const btnSwitch = document.getElementById('btn-switch-camera');
   const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
   btnStart.classList.add('hidden');
   btnBack.classList.add('hidden');
+  btnSwitch.classList.add('hidden');
   
   if (!isUploadedVideo) {
     countdownElement.classList.remove('hidden');
@@ -243,7 +248,6 @@ async function startMeasurement() {
 
   btnStop.classList.remove('hidden');
   
-  // 状態のリセット
   isMeasuring = true;
   startTime = Date.now();
   results_history = [];
@@ -252,7 +256,7 @@ async function startMeasurement() {
   last_peak_time = 0;
   
   timerElement.classList.remove('hidden');
-  instructionText.innerText = isUploadedVideo ? "解析中..." : "そのまま続けてください！";
+  instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
   
   if (isUploadedVideo) {
     videoElement.currentTime = 0;
@@ -260,7 +264,6 @@ async function startMeasurement() {
       await videoElement.play();
       processVideoFrame();
     } catch (e) {
-      console.error('Play error:', e);
       alert('動画の再生に失敗しました。');
       stopMeasurement();
       return;
@@ -274,10 +277,8 @@ async function startMeasurement() {
       clearInterval(timerInterval);
       return;
     }
-
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
     const remaining = MEASURE_DURATION - elapsed;
-    
     if (isUploadedVideo) {
       if (videoElement.ended) {
         clearInterval(timerInterval);
@@ -315,6 +316,7 @@ function stopMeasurement() {
   timerElement.classList.add('hidden');
   document.getElementById('btn-start').classList.remove('hidden');
   document.getElementById('btn-stop').classList.add('hidden');
+  document.getElementById('btn-switch-camera').classList.remove('hidden');
   document.getElementById('btn-back-to-intro-from-measure').classList.remove('hidden');
 }
 
@@ -381,16 +383,13 @@ document.getElementById('btn-back-to-intro').onclick = () => showScreen('intro')
 document.getElementById('btn-back-to-intro-from-measure').onclick = () => showScreen('intro');
 document.getElementById('btn-start').onclick = startMeasurement;
 document.getElementById('btn-stop').onclick = finishMeasurement;
-document.getElementById('btn-retry').onclick = () => {
-  // リトライ時は現在のモード（カメラor動画）を維持
-  showScreen('measure');
-};
+document.getElementById('btn-switch-camera').onclick = switchCamera;
+document.getElementById('btn-retry').onclick = () => showScreen('measure');
 
 showScreen('intro');
 
 window.addEventListener('resize', () => {
   if (!isUploadedVideo) {
-    // ライブカメラの場合は表示サイズに合わせる
     canvasElement.width = canvasElement.clientWidth;
     canvasElement.height = canvasElement.clientHeight;
   }
