@@ -1,6 +1,9 @@
 import './style.css';
 import confetti from 'canvas-confetti';
 
+// --- デバッグログ ---
+const log = (msg) => console.log(`[DEBUG] ${msg}`);
+
 // --- 定数 ---
 const MEASURE_DURATION = 15;
 const TARGET_BPM_MIN = 100;
@@ -9,6 +12,7 @@ const METRONOME_BPM = 105;
 const VERTICAL_ANGLE_THRESHOLD = 15;
 
 // --- 状態管理 ---
+let currentState = 'intro';
 let isMeasuring = false;
 let isUploadedVideo = false;
 let currentFacingMode = 'user';
@@ -44,43 +48,66 @@ const inputVideoFile = document.getElementById('input-video-file');
 
 // --- 画面遷移 ---
 function showScreen(screenName) {
-  Object.values(screens).forEach(s => s.classList.remove('active'));
-  screens[screenName].classList.add('active');
+  log(`Switching screen to: ${screenName}`);
+  
+  // 全ての画面を非表示にする
+  Object.keys(screens).forEach(key => {
+    if (screens[key]) {
+      screens[key].classList.remove('active');
+    }
+  });
 
+  // 対象の画面を表示
+  if (screens[screenName]) {
+    screens[screenName].classList.add('active');
+    currentState = screenName;
+  } else {
+    log(`Error: Screen not found - ${screenName}`);
+    return;
+  }
+
+  // 画面ごとの初期化
   if (screenName === 'measure') {
-    resetMeasurementData();
+    resetMeasurementUI();
     if (!isUploadedVideo) {
       startCamera();
     } else {
-      // 動画アップロードモードの場合は巻き戻しておく
       videoElement.currentTime = 0;
       instructionText.innerText = "動画の準備ができました。";
     }
   } else if (screenName === 'intro') {
-    // 最初の画面に戻る時は全てをクリーンアップ
     stopCamera();
     stopVideoFile();
     stopMeasurement();
   }
 }
 
-function resetMeasurementData() {
+function resetMeasurementUI() {
+  log("Resetting measurement UI");
   isMeasuring = false;
   results_history = [];
   bpm_list = [];
   last_y = 0;
   last_peak_time = 0;
   y_direction = 0;
-  timerElement.classList.add('hidden');
-  document.getElementById('btn-start').classList.remove('hidden');
-  document.getElementById('btn-stop').classList.add('hidden');
-  document.getElementById('btn-switch-camera').classList.remove('hidden');
-  document.getElementById('btn-back-to-intro-from-measure').classList.remove('hidden');
+  
+  if (timerElement) timerElement.classList.add('hidden');
+  if (countdownElement) countdownElement.classList.add('hidden');
+  
+  const ids = ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      if (id === 'btn-stop') el.classList.add('hidden');
+      else el.classList.remove('hidden');
+    }
+  });
 }
 
 // --- メトロノーム ---
 function initAudio() {
   if (!audioCtx) {
+    log("Initializing AudioContext");
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 }
@@ -101,7 +128,7 @@ function scheduleNote(time) {
   const delay = (time - audioCtx.currentTime) * 1000;
   setTimeout(() => {
     if (isMeasuring) flashMetronome();
-  }, delay > 0 ? delay : 0);
+  }, Math.max(0, delay));
 }
 
 function scheduler() {
@@ -118,8 +145,12 @@ let lastComplexity = -1;
 
 function initPose(complexity) {
   if (pose && lastComplexity === complexity) return;
+  log(`Initializing Pose (complexity: ${complexity})`);
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
-  if (!PoseClass) return;
+  if (!PoseClass) {
+    log("Pose class not found!");
+    return;
+  }
 
   pose = new PoseClass({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -137,9 +168,10 @@ function initPose(complexity) {
 }
 
 function startCamera() {
+  log("Starting camera");
   initPose(0);
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
-  if (!CameraClass || !pose) return;
+  if (!CameraClass) return;
 
   videoElement.pause();
   videoElement.srcObject = null;
@@ -155,19 +187,21 @@ function startCamera() {
     height: 480,
     facingMode: currentFacingMode
   });
-  camera.start().catch(err => console.error(err));
+  camera.start().catch(err => log(`Camera start failed: ${err}`));
 }
 
 function stopCamera() {
-  if (camera) camera.stop();
+  if (camera) {
+    log("Stopping camera");
+    camera.stop();
+  }
 }
 
 async function startVideoFile(file) {
+  log("Starting video file analysis");
   isUploadedVideo = true;
   initPose(1);
   stopCamera();
-  videoElement.pause();
-  videoElement.srcObject = null;
   
   const url = URL.createObjectURL(file);
   videoElement.src = url;
@@ -181,12 +215,9 @@ async function startVideoFile(file) {
 
 function stopVideoFile() {
   if (isUploadedVideo) {
+    log("Stopping video file");
     videoElement.pause();
-    if (videoElement.src) {
-      // ここではURLを解放せず、Introに戻る時のみ解放するように調整可能だが、
-      // メモリ管理のためIntroに戻る時に処理
-      isUploadedVideo = false;
-    }
+    isUploadedVideo = false;
   }
 }
 
@@ -217,7 +248,6 @@ function onResults(results) {
 function analyzePose(landmarks) {
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
-  
   const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
   results_history.push({ angle, wristY: wrist.y, time: Date.now() });
 
@@ -240,11 +270,14 @@ function analyzePose(landmarks) {
 }
 
 function flashMetronome() {
-  metronomeVisual.classList.remove('hidden');
-  setTimeout(() => metronomeVisual.classList.add('hidden'), 100);
+  if (metronomeVisual) {
+    metronomeVisual.classList.remove('hidden');
+    setTimeout(() => metronomeVisual.classList.add('hidden'), 100);
+  }
 }
 
 async function startMeasurement() {
+  log("Measurement started by user");
   initAudio();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
 
@@ -253,9 +286,9 @@ async function startMeasurement() {
   const btnSwitch = document.getElementById('btn-switch-camera');
   const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
-  btnStart.classList.add('hidden');
-  btnBack.classList.add('hidden');
-  btnSwitch.classList.add('hidden');
+  if (btnStart) btnStart.classList.add('hidden');
+  if (btnBack) btnBack.classList.add('hidden');
+  if (btnSwitch) btnSwitch.classList.add('hidden');
   
   if (!isUploadedVideo) {
     countdownElement.classList.remove('hidden');
@@ -267,16 +300,10 @@ async function startMeasurement() {
     countdownElement.classList.add('hidden');
   }
 
-  btnStop.classList.remove('hidden');
+  if (btnStop) btnStop.classList.remove('hidden');
   
-  // 以前の計測データをリセット
-  results_history = [];
-  bpm_list = [];
-  last_y = 0;
-  last_peak_time = 0;
   isMeasuring = true;
   startTime = Date.now();
-
   timerElement.classList.remove('hidden');
   instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
   
@@ -289,7 +316,7 @@ async function startMeasurement() {
       await videoElement.play();
       processVideoFrame();
     } catch (e) {
-      alert('動画再生失敗');
+      log(`Play failed: ${e}`);
       stopMeasurement();
       return;
     }
@@ -306,7 +333,7 @@ async function startMeasurement() {
     } else {
       const remaining = MEASURE_DURATION - elapsed;
       if (remaining <= 0) { clearInterval(timerInterval); finishMeasurement(); }
-      timerElement.innerText = `00:${remaining.toString().padStart(2, '0')}`;
+      timerElement.innerText = `00:${Math.max(0, remaining).toString().padStart(2, '0')}`;
     }
   }, 1000);
 }
@@ -319,22 +346,22 @@ async function processVideoFrame() {
 }
 
 function stopMeasurement() {
+  log("Measurement stopped");
   isMeasuring = false;
-  clearInterval(timerID);
-  timerElement.classList.add('hidden');
-  document.getElementById('btn-start').classList.remove('hidden');
-  document.getElementById('btn-stop').classList.add('hidden');
-  document.getElementById('btn-switch-camera').classList.remove('hidden');
-  document.getElementById('btn-back-to-intro-from-measure').classList.remove('hidden');
+  if (timerID) clearInterval(timerID);
+  
+  resetMeasurementUI();
 }
 
 function finishMeasurement() {
+  log("Measurement finished normally");
   stopMeasurement();
   calculateResult();
   showScreen('result');
 }
 
 function calculateResult() {
+  log("Calculating final results");
   const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
   const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
   const avgAngle = results_history.length > 0 ? results_history.reduce((a, b) => a + b.angle, 0) / results_history.length : 99;
@@ -346,45 +373,76 @@ function calculateResult() {
   const evalRhythm = document.getElementById('eval-rhythm');
   const adviceText = document.getElementById('advice-text');
   
-  evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！";
-  evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`;
-  evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！";
-  evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`;
+  if (evalVertical) {
+    evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！";
+    evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`;
+  }
+  if (evalRhythm) {
+    evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！";
+    evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`;
+  }
   
   if (isRhythmOk && isVerticalOk) {
-    rankElement.innerText = "◎";
-    rankTextElement.innerText = "完璧です！素晴らしい！";
-    adviceText.innerText = "垂直に、正しいリズムで押せています。この感覚を忘れないようにしましょう。";
+    if (rankElement) rankElement.innerText = "◎";
+    if (rankTextElement) rankTextElement.innerText = "完璧です！素晴らしい！";
+    if (adviceText) adviceText.innerText = "垂直に、正しいリズムで押せています。この感覚を忘れないようにしましょう。";
     confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
   } else if (isRhythmOk || isVerticalOk) {
-    rankElement.innerText = "○";
-    rankTextElement.innerText = "あと一歩です！";
-    adviceText.innerText = isRhythmOk ? 
+    if (rankElement) rankElement.innerText = "○";
+    if (rankTextElement) rankTextElement.innerText = "あと一歩です！";
+    if (adviceText) adviceText.innerText = isRhythmOk ? 
       "リズムはバッチリです！次はもう少し腕を真っ直ぐ、真上から押すことを意識してみましょう。" :
       "押し方はとても綺麗です！次はメトロノームの音に合わせて、もう少しテンポを意識してみましょう。";
   } else {
-    rankElement.innerText = "△";
-    rankTextElement.innerText = "練習を続けましょう！";
-    adviceText.innerText = "まずはリラックスして、メトロノームの音を聞きながら腕を真っ直ぐ伸ばすことから始めてみましょう。";
+    if (rankElement) rankElement.innerText = "△";
+    if (rankTextElement) rankTextElement.innerText = "練習を続けましょう！";
+    if (adviceText) adviceText.innerText = "まずはリラックスして、メトロノームの音を聞きながら腕を真っ直ぐ伸ばすことから始めてみましょう。";
   }
 }
 
-// --- イベントリスナー ---
-document.getElementById('btn-to-guide').onclick = () => { isUploadedVideo = false; showScreen('guide'); };
-document.getElementById('btn-upload-trigger').onclick = () => inputVideoFile.click();
-inputVideoFile.onchange = (e) => { const file = e.target.files[0]; if (file) startVideoFile(file); };
-document.getElementById('btn-to-measure').onclick = () => showScreen('measure');
-document.getElementById('btn-back-to-intro').onclick = () => showScreen('intro');
-document.getElementById('btn-back-to-intro-from-measure').onclick = () => showScreen('intro');
-document.getElementById('btn-start').onclick = startMeasurement;
-document.getElementById('btn-stop').onclick = finishMeasurement;
-document.getElementById('btn-switch-camera').onclick = switchCamera;
-document.getElementById('btn-retry').onclick = () => showScreen('measure');
+// --- イベントリスナーの登録 ---
+const bindEvents = () => {
+  log("Binding event listeners");
+  
+  const clickActions = {
+    'btn-to-guide': () => { isUploadedVideo = false; showScreen('guide'); },
+    'btn-to-measure': () => showScreen('measure');
+    'btn-back-to-intro': () => showScreen('intro');
+    'btn-back-to-intro-from-measure': () => showScreen('intro');
+    'btn-start': startMeasurement;
+    'btn-stop': finishMeasurement;
+    'btn-retry': () => { log("Retry button clicked"); showScreen('measure'); },
+    'btn-switch-camera': () => {
+      currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+      log(`Switching camera to: ${currentFacingMode}`);
+      if (!isUploadedVideo) startCamera();
+    },
+    'btn-upload-trigger': () => inputVideoFile.click()
+  };
 
+  Object.keys(clickActions).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.onclick = clickActions[id];
+    } else {
+      log(`Warning: Element for binding not found - ${id}`);
+    }
+  });
+
+  if (inputVideoFile) {
+    inputVideoFile.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) startVideoFile(file);
+    };
+  }
+};
+
+// 初期起動
+bindEvents();
 showScreen('intro');
 
 window.addEventListener('resize', () => {
-  if (!isUploadedVideo) {
+  if (!isUploadedVideo && canvasElement) {
     canvasElement.width = canvasElement.clientWidth;
     canvasElement.height = canvasElement.clientHeight;
   }
