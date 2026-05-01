@@ -48,9 +48,11 @@ function showScreen(screenName) {
     if (!isUploadedVideo) {
       startCamera();
     }
-  } else if (screenName !== 'measure') {
+  } else {
     stopCamera();
-    stopVideoFile();
+    if (screenName !== 'measure') {
+      stopVideoFile();
+    }
   }
 }
 
@@ -99,19 +101,14 @@ function stopCamera() {
   if (camera) camera.stop();
 }
 
-// 動画ファイル用の処理
 async function startVideoFile(file) {
   isUploadedVideo = true;
   initPose();
-  
   const url = URL.createObjectURL(file);
   videoElement.src = url;
-  videoElement.style.display = 'block'; // 動画ファイルの場合は見えるようにしても良いが、Canvasに描画するので隠したままでもOK
   videoElement.load();
-  
   showScreen('measure');
-  instructionText.innerText = "動画を読み込みました。スタートを押すと解析を開始します。";
-  processingOverlay.classList.add('hidden');
+  instructionText.innerText = "動画を読み込みました。";
 }
 
 function stopVideoFile() {
@@ -122,14 +119,22 @@ function stopVideoFile() {
 
 // --- 解析ロジック ---
 function onResults(results) {
+  // キャンバスサイズの調整（映像の比率に合わせる）
+  if (results.image.width && results.image.height) {
+    if (canvasElement.width !== results.image.width || canvasElement.height !== results.image.height) {
+      canvasElement.width = results.image.width;
+      canvasElement.height = results.image.height;
+    }
+  }
+
   canvasCtx.save();
   canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
   canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
   
   if (results.poseLandmarks) {
     if (window.drawConnectors && window.drawLandmarks) {
-      window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 2 });
-      window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 1, radius: 5 });
+      window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
+      window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
     }
 
     if (isMeasuring) {
@@ -176,8 +181,10 @@ function flashMetronome() {
 async function startMeasurement() {
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
+  const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
   btnStart.classList.add('hidden');
+  btnBack.classList.add('hidden');
   
   if (!isUploadedVideo) {
     countdownElement.classList.remove('hidden');
@@ -189,13 +196,12 @@ async function startMeasurement() {
   }
 
   btnStop.classList.remove('hidden');
-  
   isMeasuring = true;
   startTime = Date.now();
   results_history = [];
   bpm_list = [];
   timerElement.classList.remove('hidden');
-  instructionText.innerText = isUploadedVideo ? "動画を解析中です..." : "そのまま続けてください！";
+  instructionText.innerText = isUploadedVideo ? "解析中..." : "そのまま続けてください！";
   
   if (isUploadedVideo) {
     videoElement.play();
@@ -207,13 +213,11 @@ async function startMeasurement() {
   const timerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
     const remaining = MEASURE_DURATION - elapsed;
-    
     if (isUploadedVideo) {
       if (videoElement.ended) {
         clearInterval(timerInterval);
         finishMeasurement();
       }
-      timerElement.innerText = "解析中...";
     } else {
       if (remaining <= 0) {
         clearInterval(timerInterval);
@@ -245,6 +249,7 @@ function stopMeasurement() {
   timerElement.classList.add('hidden');
   document.getElementById('btn-start').classList.remove('hidden');
   document.getElementById('btn-stop').classList.add('hidden');
+  document.getElementById('btn-back-to-intro-from-measure').classList.remove('hidden');
 }
 
 function finishMeasurement() {
@@ -314,8 +319,4 @@ document.getElementById('btn-retry').onclick = () => showScreen('measure');
 
 showScreen('intro');
 
-window.addEventListener('resize', () => {
-  canvasElement.width = canvasElement.clientWidth;
-  canvasElement.height = canvasElement.clientHeight;
-});
-window.dispatchEvent(new Event('resize'));
+// CanvasサイズはonResults内で動的に調整されるため、ここでの初期調整は省略

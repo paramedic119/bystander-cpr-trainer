@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="./javascript.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>胸骨圧迫トレーニング - いのちを救う準備</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>胸骨圧迫復習アプリ - 正しい技術を身につける</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
@@ -19,13 +19,14 @@
       <!-- 導入画面 -->
       <section id="screen-intro" class="screen active">
         <div class="content">
-          <h1>いのちを救う練習</h1>
-          <p class="subtitle">胸骨圧迫トレーニングへようこそ</p>
+          <h1>胸骨圧迫復習アプリ</h1>
+          <p class="subtitle">正しい技術を身につけましょう</p>
           <div class="card shadow">
-            <p>このアプリは、救急講習のあとの復習をサポートします。カメラで撮るか、保存した動画を選んでチェックできます。</p>
+            <p>救命講習のあとの復習に。スマホのカメラで「垂直な押し方」と「リズム」をAIが判定します。</p>
+            <p class="note">※判定には<strong>真横から撮影した映像</strong>が必要です。</p>
           </div>
           <button id="btn-to-guide" class="btn-primary">カメラで計測する</button>
-          <button id="btn-upload-trigger" class="btn-secondary">動画を選んで判定</button>
+          <button id="btn-upload-trigger" class="btn-secondary">保存済みの動画で判定</button>
           <input type="file" id="input-video-file" accept="video/*" class="hidden">
         </div>
       </section>
@@ -33,19 +34,19 @@
       <!-- ガイド画面 -->
       <section id="screen-guide" class="screen">
         <div class="content">
-          <h2>準備しましょう</h2>
+          <h2>撮影のポイント</h2>
           <div class="guide-steps">
             <div class="step">
               <div class="step-number">1</div>
-              <p>クッションや枕を「患者さん」に見立てて床に置きます。</p>
+              <p>クッション等を床に置き、スマホを立てかけます。</p>
             </div>
-            <div class="step">
+            <div class="step warning">
               <div class="step-number">2</div>
-              <p>スマホをあなたの<strong>真横</strong>に、床から少し離して立てかけます。</p>
+              <p>スマホは必ずあなたの<strong>「真横」</strong>に置いてください。垂直に押せているかを確認するための重要ポイントです！</p>
             </div>
             <div class="step">
               <div class="step-number">3</div>
-              <p>全身（特に上半身）が画面に映るように調整してください。</p>
+              <p>縦画面でも横画面でもOK！全身（頭から腰まで）が映るように調整してください。</p>
             </div>
           </div>
           <button id="btn-to-measure" class="btn-primary">準備OK！</button>
@@ -54,7 +55,7 @@
       </section>
 
       <!-- 計測画面 -->
-      <section id="screen-measure" class="screen">
+      <section id="screen-measure" class="screen full-screen">
         <div class="camera-container">
           <video id="input-video" playsinline></video>
           <canvas id="output-canvas"></canvas>
@@ -65,9 +66,9 @@
             <div id="processing-overlay" class="hidden">動画を解析中...</div>
           </div>
         </div>
-        <div class="controls">
-          <p id="instruction-text">姿勢を整えて「スタート」を押してください</p>
-          <div class="button-group">
+        <div class="measure-controls">
+          <p id="instruction-text">姿勢を整えて「スタート」</p>
+          <div class="button-group-horizontal">
             <button id="btn-start" class="btn-primary">スタート</button>
             <button id="btn-stop" class="btn-danger hidden">中止</button>
             <button id="btn-back-to-intro-from-measure" class="btn-secondary">戻る</button>
@@ -79,7 +80,7 @@
       <!-- 結果画面 -->
       <section id="screen-result" class="screen">
         <div class="content">
-          <h2>練習お疲れ様でした！</h2>
+          <h2>復習結果</h2>
           <div id="result-score" class="score-display">
             <span class="rank">◎</span>
             <p class="rank-text">素晴らしいです！</p>
