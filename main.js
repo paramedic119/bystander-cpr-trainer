@@ -5,7 +5,7 @@ import confetti from 'canvas-confetti';
 const MEASURE_DURATION = 15;
 const TARGET_BPM_MIN = 100;
 const TARGET_BPM_MAX = 120;
-const METRONOME_BPM = 105; // 105回/分に設定
+const METRONOME_BPM = 105;
 const VERTICAL_ANGLE_THRESHOLD = 15;
 
 // --- 状態管理 ---
@@ -14,14 +14,16 @@ let isUploadedVideo = false;
 let currentFacingMode = 'user';
 let startTime = 0;
 let results_history = [];
-let metronomeInterval = null;
 let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
 let y_direction = 0;
 
-// Web Audio API
+// Web Audio API & Scheduler
 let audioCtx = null;
+let nextNoteTime = 0.0; // 次に音を鳴らす時間
+const scheduleAheadTime = 0.1; // 100ms先まで予約
+let timerID = null;
 
 // --- DOM要素 ---
 const screens = {
@@ -59,39 +61,49 @@ function showScreen(screenName) {
   }
 }
 
-// --- メトロノーム（Web Audio API） ---
+// --- 高精度メトロノーム・スケジューラー ---
 function initAudio() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 }
 
-function playMetronomeSound() {
-  if (!audioCtx) return;
-  
+function scheduleNote(time) {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  
   osc.connect(gain);
   gain.connect(audioCtx.destination);
-  
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 高めの電子音
-  
-  gain.gain.setValueAtTime(0, audioCtx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
-  
-  osc.start(audioCtx.currentTime);
-  osc.stop(audioCtx.currentTime + 0.1);
+  osc.frequency.setValueAtTime(880, time);
+  gain.gain.setValueAtTime(0, time);
+  gain.gain.linearRampToValueAtTime(0.1, time + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.1);
+  osc.start(time);
+  osc.stop(time + 0.1);
+
+  // 視覚的なメトロノームも時間差で実行
+  const delay = (time - audioCtx.currentTime) * 1000;
+  setTimeout(() => {
+    if (isMeasuring || currentState === 'measure') flashMetronome();
+  }, delay);
+}
+
+function scheduler() {
+  while (nextNoteTime < audioCtx.currentTime + scheduleAheadTime) {
+    scheduleNote(nextNoteTime);
+    nextNoteTime += 60.0 / METRONOME_BPM;
+  }
 }
 
 // --- MediaPipe Setup ---
 let pose = null;
 let camera = null;
+let lastComplexity = -1;
 
-function initPose() {
-  if (pose) return;
+function initPose(complexity) {
+  // モデルの複雑さが変わる場合のみ再初期化
+  if (pose && lastComplexity === complexity) return;
+  
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
   if (!PoseClass) return;
 
@@ -100,17 +112,18 @@ function initPose() {
   });
 
   pose.setOptions({
-    modelComplexity: 1,
+    modelComplexity: complexity, // 0: Lite, 1: Full
     smoothLandmarks: true,
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5
   });
 
   pose.onResults(onResults);
+  lastComplexity = complexity;
 }
 
 function startCamera() {
-  initPose();
+  initPose(0); // カメラは速度優先 (Lite)
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass || !pose) return;
 
@@ -118,11 +131,8 @@ function startCamera() {
   videoElement.pause();
   videoElement.srcObject = null;
   videoElement.src = "";
-  videoElement.style.display = 'none';
-
-  if (camera) {
-    camera.stop();
-  }
+  
+  if (camera) camera.stop();
 
   camera = new CameraClass(videoElement, {
     onFrame: async () => {
@@ -132,44 +142,29 @@ function startCamera() {
     height: 480,
     facingMode: currentFacingMode
   });
-  
-  camera.start().catch(err => {
-    console.error('Camera Error:', err);
-  });
+  camera.start().catch(err => console.error(err));
 }
 
 function stopCamera() {
   if (camera) camera.stop();
 }
 
-function switchCamera() {
-  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-  if (!isUploadedVideo) {
-    startCamera();
-  }
-}
-
 async function startVideoFile(file) {
   isUploadedVideo = true;
-  initPose();
+  initPose(1); // 動画ファイルは精度優先 (Full)
   stopCamera();
   videoElement.pause();
   videoElement.srcObject = null;
   
   videoElement.onerror = () => {
-    if (isUploadedVideo) {
-      alert('動画の読み込みに失敗しました。');
-      isUploadedVideo = false;
-    }
+    if (isUploadedVideo) alert('動画読み込みエラー');
   };
   
   const url = URL.createObjectURL(file);
   videoElement.src = url;
-  videoElement.muted = true;
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
     instructionText.innerText = "動画を読み込みました。";
-    processingOverlay.classList.add('hidden');
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
   };
@@ -179,7 +174,6 @@ async function startVideoFile(file) {
 function stopVideoFile() {
   if (isUploadedVideo) {
     videoElement.pause();
-    videoElement.onerror = null;
     if (videoElement.src) {
       URL.revokeObjectURL(videoElement.src);
       videoElement.src = "";
@@ -207,9 +201,7 @@ function onResults(results) {
       window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
       window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
     }
-    if (isMeasuring) {
-      analyzePose(results.poseLandmarks);
-    }
+    if (isMeasuring) analyzePose(results.poseLandmarks);
   }
   canvasCtx.restore();
 }
@@ -230,10 +222,7 @@ function analyzePose(landmarks) {
       const now = Date.now();
       if (last_peak_time !== 0) {
         const bpm = 60000 / (now - last_peak_time);
-        if (bpm > 60 && bpm < 200) {
-          bpm_list.push(bpm);
-          flashMetronome();
-        }
+        if (bpm > 60 && bpm < 200) bpm_list.push(bpm);
       }
       last_peak_time = now;
     }
@@ -252,10 +241,8 @@ async function startMeasurement() {
   const btnSwitch = document.getElementById('btn-switch-camera');
   const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
-  initAudio(); // AudioContextの初期化
-  if (audioCtx.state === 'suspended') {
-    await audioCtx.resume();
-  }
+  initAudio();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
 
   btnStart.classList.add('hidden');
   btnBack.classList.add('hidden');
@@ -265,7 +252,7 @@ async function startMeasurement() {
     countdownElement.classList.remove('hidden');
     for (let i = 3; i > 0; i--) {
       countdownElement.innerText = i;
-      playMetronomeSound(); // カウントダウン中も音を出すと親切
+      scheduleNote(audioCtx.currentTime); // カウントダウン音
       await new Promise(r => setTimeout(r, 1000));
     }
     countdownElement.classList.add('hidden');
@@ -278,22 +265,23 @@ async function startMeasurement() {
   bpm_list = [];
   last_y = 0;
   last_peak_time = 0;
-  
   timerElement.classList.remove('hidden');
   instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
   
+  // スケジューラー開始
+  nextNoteTime = audioCtx.currentTime;
+  timerID = setInterval(scheduler, 25.0);
+
   if (isUploadedVideo) {
     videoElement.currentTime = 0;
     try {
       await videoElement.play();
       processVideoFrame();
     } catch (e) {
-      alert('動画の再生に失敗しました。');
+      alert('動画再生失敗');
       stopMeasurement();
       return;
     }
-  } else {
-    startMetronome();
   }
   
   const timerInterval = setInterval(() => {
@@ -302,18 +290,11 @@ async function startMeasurement() {
       return;
     }
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const remaining = MEASURE_DURATION - elapsed;
     if (isUploadedVideo) {
-      if (videoElement.ended) {
-        clearInterval(timerInterval);
-        finishMeasurement();
-      }
-      timerElement.innerText = "解析中...";
+      if (videoElement.ended) { clearInterval(timerInterval); finishMeasurement(); }
     } else {
-      if (remaining <= 0) {
-        clearInterval(timerInterval);
-        finishMeasurement();
-      }
+      const remaining = MEASURE_DURATION - elapsed;
+      if (remaining <= 0) { clearInterval(timerInterval); finishMeasurement(); }
       timerElement.innerText = `00:${remaining.toString().padStart(2, '0')}`;
     }
   }, 1000);
@@ -326,16 +307,9 @@ async function processVideoFrame() {
   }
 }
 
-function startMetronome() {
-  const interval = 60000 / METRONOME_BPM; // 105 BPM
-  metronomeInterval = setInterval(() => {
-    playMetronomeSound();
-  }, interval);
-}
-
 function stopMeasurement() {
   isMeasuring = false;
-  clearInterval(metronomeInterval);
+  clearInterval(timerID);
   timerElement.classList.add('hidden');
   document.getElementById('btn-start').classList.remove('hidden');
   document.getElementById('btn-stop').classList.add('hidden');
@@ -385,22 +359,9 @@ function calculateResult() {
 }
 
 // --- イベントリスナー ---
-document.getElementById('btn-to-guide').onclick = () => {
-  isUploadedVideo = false;
-  showScreen('guide');
-};
-
-document.getElementById('btn-upload-trigger').onclick = () => {
-  inputVideoFile.click();
-};
-
-inputVideoFile.onchange = (e) => {
-  const file = e.target.files[0];
-  if (file) {
-    startVideoFile(file);
-  }
-};
-
+document.getElementById('btn-to-guide').onclick = () => { isUploadedVideo = false; showScreen('guide'); };
+document.getElementById('btn-upload-trigger').onclick = () => inputVideoFile.click();
+inputVideoFile.onchange = (e) => { const file = e.target.files[0]; if (file) startVideoFile(file); };
 document.getElementById('btn-to-measure').onclick = () => showScreen('measure');
 document.getElementById('btn-back-to-intro').onclick = () => showScreen('intro');
 document.getElementById('btn-back-to-intro-from-measure').onclick = () => showScreen('intro');
