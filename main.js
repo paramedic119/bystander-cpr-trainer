@@ -5,12 +5,13 @@ import confetti from 'canvas-confetti';
 const MEASURE_DURATION = 15;
 const TARGET_BPM_MIN = 100;
 const TARGET_BPM_MAX = 120;
+const METRONOME_BPM = 105; // 105回/分に設定
 const VERTICAL_ANGLE_THRESHOLD = 15;
 
 // --- 状態管理 ---
 let isMeasuring = false;
 let isUploadedVideo = false;
-let currentFacingMode = 'user'; // 'user' (イン) または 'environment' (アウト)
+let currentFacingMode = 'user';
 let startTime = 0;
 let results_history = [];
 let metronomeInterval = null;
@@ -18,6 +19,9 @@ let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
 let y_direction = 0;
+
+// Web Audio API
+let audioCtx = null;
 
 // --- DOM要素 ---
 const screens = {
@@ -30,7 +34,6 @@ const screens = {
 const videoElement = document.getElementById('input-video');
 const canvasElement = document.getElementById('output-canvas');
 const canvasCtx = canvasElement.getContext('2d');
-const audioMetronome = document.getElementById('audio-metronome');
 const timerElement = document.getElementById('timer');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
@@ -54,6 +57,33 @@ function showScreen(screenName) {
       stopMeasurement();
     }
   }
+}
+
+// --- メトロノーム（Web Audio API） ---
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+}
+
+function playMetronomeSound() {
+  if (!audioCtx) return;
+  
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 高めの電子音
+  
+  gain.gain.setValueAtTime(0, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
+  
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.1);
 }
 
 // --- MediaPipe Setup ---
@@ -84,7 +114,6 @@ function startCamera() {
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass || !pose) return;
 
-  // エラーリスナーを一旦解除
   videoElement.onerror = null;
   videoElement.pause();
   videoElement.srcObject = null;
@@ -106,14 +135,11 @@ function startCamera() {
   
   camera.start().catch(err => {
     console.error('Camera Error:', err);
-    // カメラアクセス失敗時のフォールバック
   });
 }
 
 function stopCamera() {
-  if (camera) {
-    camera.stop();
-  }
+  if (camera) camera.stop();
 }
 
 function switchCamera() {
@@ -127,11 +153,9 @@ async function startVideoFile(file) {
   isUploadedVideo = true;
   initPose();
   stopCamera();
-  
   videoElement.pause();
   videoElement.srcObject = null;
   
-  // 動画読み込み時のみエラーリスナーを登録
   videoElement.onerror = () => {
     if (isUploadedVideo) {
       alert('動画の読み込みに失敗しました。');
@@ -142,7 +166,6 @@ async function startVideoFile(file) {
   const url = URL.createObjectURL(file);
   videoElement.src = url;
   videoElement.muted = true;
-  
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
     instructionText.innerText = "動画を読み込みました。";
@@ -150,14 +173,13 @@ async function startVideoFile(file) {
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
   };
-  
   videoElement.load();
 }
 
 function stopVideoFile() {
   if (isUploadedVideo) {
     videoElement.pause();
-    videoElement.onerror = null; // リスナー解除
+    videoElement.onerror = null;
     if (videoElement.src) {
       URL.revokeObjectURL(videoElement.src);
       videoElement.src = "";
@@ -169,7 +191,6 @@ function stopVideoFile() {
 // --- 解析ロジック ---
 function onResults(results) {
   if (!results.image) return;
-
   const w = results.image.width;
   const h = results.image.height;
   if (w && h && (canvasElement.width !== w || canvasElement.height !== h)) {
@@ -186,7 +207,6 @@ function onResults(results) {
       window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
       window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
     }
-
     if (isMeasuring) {
       analyzePose(results.poseLandmarks);
     }
@@ -197,7 +217,6 @@ function onResults(results) {
 function analyzePose(landmarks) {
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
-  
   const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
   results_history.push({ angle, wristY: wrist.y, time: Date.now() });
 
@@ -233,6 +252,11 @@ async function startMeasurement() {
   const btnSwitch = document.getElementById('btn-switch-camera');
   const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
+  initAudio(); // AudioContextの初期化
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
+
   btnStart.classList.add('hidden');
   btnBack.classList.add('hidden');
   btnSwitch.classList.add('hidden');
@@ -241,13 +265,13 @@ async function startMeasurement() {
     countdownElement.classList.remove('hidden');
     for (let i = 3; i > 0; i--) {
       countdownElement.innerText = i;
+      playMetronomeSound(); // カウントダウン中も音を出すと親切
       await new Promise(r => setTimeout(r, 1000));
     }
     countdownElement.classList.add('hidden');
   }
 
   btnStop.classList.remove('hidden');
-  
   isMeasuring = true;
   startTime = Date.now();
   results_history = [];
@@ -303,10 +327,9 @@ async function processVideoFrame() {
 }
 
 function startMetronome() {
-  const interval = 60000 / 110;
+  const interval = 60000 / METRONOME_BPM; // 105 BPM
   metronomeInterval = setInterval(() => {
-    audioMetronome.currentTime = 0;
-    audioMetronome.play().catch(() => {});
+    playMetronomeSound();
   }, interval);
 }
 
