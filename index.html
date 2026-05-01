@@ -8,6 +8,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Libraries (CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
   </head>
   <body>
     <div id="app">
@@ -49,7 +54,7 @@
       <!-- 計測画面 -->
       <section id="screen-measure" class="screen">
         <div class="camera-container">
-          <video id="input-video" playsinline></video>
+          <video id="input-video" playsinline style="display:none"></video>
           <canvas id="output-canvas"></canvas>
           <div id="status-overlay">
             <div id="countdown" class="hidden">3</div>
