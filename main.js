@@ -10,6 +10,7 @@ const VERTICAL_ANGLE_THRESHOLD = 15;
 // --- 状態管理 ---
 let currentState = 'intro';
 let isMeasuring = false;
+let isUploadedVideo = false;
 let startTime = 0;
 let results_history = [];
 let metronomeInterval = null;
@@ -34,6 +35,8 @@ const timerElement = document.getElementById('timer');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
 const instructionText = document.getElementById('instruction-text');
+const processingOverlay = document.getElementById('processing-overlay');
+const inputVideoFile = document.getElementById('input-video-file');
 
 // --- 画面遷移 ---
 function showScreen(screenName) {
@@ -42,25 +45,23 @@ function showScreen(screenName) {
   currentState = screenName;
 
   if (screenName === 'measure') {
-    startCamera();
-  } else {
+    if (!isUploadedVideo) {
+      startCamera();
+    }
+  } else if (screenName !== 'measure') {
     stopCamera();
+    stopVideoFile();
   }
 }
 
-// --- MediaPipe Setup (Global) ---
+// --- MediaPipe Setup ---
 let pose = null;
 let camera = null;
 
 function initPose() {
   if (pose) return;
-  
-  // CDNから読み込まれたグローバルのPoseクラスを使用
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
-  if (!PoseClass) {
-    console.error('MediaPipe Pose is not loaded yet');
-    return;
-  }
+  if (!PoseClass) return;
 
   pose = new PoseClass({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -78,13 +79,10 @@ function initPose() {
 
 function startCamera() {
   initPose();
-  
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
-  if (!CameraClass || !pose) {
-    alert('カメラの準備ができていません。少し待ってからやり直してください。');
-    return;
-  }
+  if (!CameraClass || !pose) return;
 
+  videoElement.style.display = 'none';
   if (!camera) {
     camera = new CameraClass(videoElement, {
       onFrame: async () => {
@@ -99,7 +97,27 @@ function startCamera() {
 
 function stopCamera() {
   if (camera) camera.stop();
-  stopMeasurement();
+}
+
+// 動画ファイル用の処理
+async function startVideoFile(file) {
+  isUploadedVideo = true;
+  initPose();
+  
+  const url = URL.createObjectURL(file);
+  videoElement.src = url;
+  videoElement.style.display = 'block'; // 動画ファイルの場合は見えるようにしても良いが、Canvasに描画するので隠したままでもOK
+  videoElement.load();
+  
+  showScreen('measure');
+  instructionText.innerText = "動画を読み込みました。スタートを押すと解析を開始します。";
+  processingOverlay.classList.add('hidden');
+}
+
+function stopVideoFile() {
+  videoElement.pause();
+  videoElement.src = "";
+  isUploadedVideo = false;
 }
 
 // --- 解析ロジック ---
@@ -109,7 +127,6 @@ function onResults(results) {
   canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
   
   if (results.poseLandmarks) {
-    // グローバルのdrawingUtilsを使用
     if (window.drawConnectors && window.drawLandmarks) {
       window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 2 });
       window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 1, radius: 5 });
@@ -159,17 +176,18 @@ function flashMetronome() {
 async function startMeasurement() {
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
-  const btnBack = document.getElementById('btn-back-to-guide');
   
   btnStart.classList.add('hidden');
-  btnBack.classList.add('hidden');
-  countdownElement.classList.remove('hidden');
   
-  for (let i = 3; i > 0; i--) {
-    countdownElement.innerText = i;
-    await new Promise(r => setTimeout(r, 1000));
+  if (!isUploadedVideo) {
+    countdownElement.classList.remove('hidden');
+    for (let i = 3; i > 0; i--) {
+      countdownElement.innerText = i;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    countdownElement.classList.add('hidden');
   }
-  countdownElement.classList.add('hidden');
+
   btnStop.classList.remove('hidden');
   
   isMeasuring = true;
@@ -177,19 +195,40 @@ async function startMeasurement() {
   results_history = [];
   bpm_list = [];
   timerElement.classList.remove('hidden');
-  instructionText.innerText = "そのまま続けてください！";
+  instructionText.innerText = isUploadedVideo ? "動画を解析中です..." : "そのまま続けてください！";
   
-  startMetronome();
+  if (isUploadedVideo) {
+    videoElement.play();
+    processVideoFrame();
+  } else {
+    startMetronome();
+  }
   
   const timerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
     const remaining = MEASURE_DURATION - elapsed;
-    if (remaining <= 0) {
-      clearInterval(timerInterval);
-      finishMeasurement();
+    
+    if (isUploadedVideo) {
+      if (videoElement.ended) {
+        clearInterval(timerInterval);
+        finishMeasurement();
+      }
+      timerElement.innerText = "解析中...";
+    } else {
+      if (remaining <= 0) {
+        clearInterval(timerInterval);
+        finishMeasurement();
+      }
+      timerElement.innerText = `00:${remaining.toString().padStart(2, '0')}`;
     }
-    timerElement.innerText = `00:${remaining.toString().padStart(2, '0')}`;
   }, 1000);
+}
+
+async function processVideoFrame() {
+  if (isUploadedVideo && !videoElement.paused && !videoElement.ended) {
+    await pose.send({ image: videoElement });
+    requestAnimationFrame(processVideoFrame);
+  }
 }
 
 function startMetronome() {
@@ -206,7 +245,6 @@ function stopMeasurement() {
   timerElement.classList.add('hidden');
   document.getElementById('btn-start').classList.remove('hidden');
   document.getElementById('btn-stop').classList.add('hidden');
-  document.getElementById('btn-back-to-guide').classList.remove('hidden');
 }
 
 function finishMeasurement() {
@@ -251,10 +289,25 @@ function calculateResult() {
 }
 
 // --- イベントリスナー ---
-document.getElementById('btn-to-guide').onclick = () => showScreen('guide');
+document.getElementById('btn-to-guide').onclick = () => {
+  isUploadedVideo = false;
+  showScreen('guide');
+};
+
+document.getElementById('btn-upload-trigger').onclick = () => {
+  inputVideoFile.click();
+};
+
+inputVideoFile.onchange = (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    startVideoFile(file);
+  }
+};
+
 document.getElementById('btn-to-measure').onclick = () => showScreen('measure');
 document.getElementById('btn-back-to-intro').onclick = () => showScreen('intro');
-document.getElementById('btn-back-to-guide').onclick = () => showScreen('guide');
+document.getElementById('btn-back-to-intro-from-measure').onclick = () => showScreen('intro');
 document.getElementById('btn-start').onclick = startMeasurement;
 document.getElementById('btn-stop').onclick = finishMeasurement;
 document.getElementById('btn-retry').onclick = () => showScreen('measure');

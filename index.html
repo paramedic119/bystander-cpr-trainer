@@ -22,9 +22,11 @@
           <h1>いのちを救う練習</h1>
           <p class="subtitle">胸骨圧迫トレーニングへようこそ</p>
           <div class="card shadow">
-            <p>このアプリは、救急講習のあとの復習をサポートします。スマートフォンのカメラを使って、あなたの胸骨圧迫を優しくチェックします。</p>
+            <p>このアプリは、救急講習のあとの復習をサポートします。カメラで撮るか、保存した動画を選んでチェックできます。</p>
           </div>
-          <button id="btn-to-guide" class="btn-primary">はじめる</button>
+          <button id="btn-to-guide" class="btn-primary">カメラで計測する</button>
+          <button id="btn-upload-trigger" class="btn-secondary">動画を選んで判定</button>
+          <input type="file" id="input-video-file" accept="video/*" class="hidden">
         </div>
       </section>
 
@@ -54,12 +56,13 @@
       <!-- 計測画面 -->
       <section id="screen-measure" class="screen">
         <div class="camera-container">
-          <video id="input-video" playsinline style="display:none"></video>
+          <video id="input-video" playsinline></video>
           <canvas id="output-canvas"></canvas>
           <div id="status-overlay">
             <div id="countdown" class="hidden">3</div>
             <div id="timer" class="hidden">00:15</div>
             <div id="metronome-visual" class="hidden"></div>
+            <div id="processing-overlay" class="hidden">動画を解析中...</div>
           </div>
         </div>
         <div class="controls">
@@ -67,7 +70,7 @@
           <div class="button-group">
             <button id="btn-start" class="btn-primary">スタート</button>
             <button id="btn-stop" class="btn-danger hidden">中止</button>
-            <button id="btn-back-to-guide" class="btn-secondary">戻る</button>
+            <button id="btn-back-to-intro-from-measure" class="btn-secondary">戻る</button>
           </div>
         </div>
         <audio id="audio-metronome" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3" preload="auto"></audio>
