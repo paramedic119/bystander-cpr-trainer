@@ -1,14 +1,15 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized (Enhanced Rhythm Logic)");
+log("main.js initialized (Stabilized Tracking Mode)");
 
 // --- 定数 ---
 const MEASURE_DURATION = 15;
-const TARGET_BPM_MIN = 98; // 許容範囲を少し広げる (100 -> 98)
-const TARGET_BPM_MAX = 122; // 許容範囲を少し広げる (120 -> 122)
+const TARGET_BPM_MIN = 98;
+const TARGET_BPM_MAX = 122;
 const METRONOME_BPM = 105;
-const VERTICAL_ANGLE_THRESHOLD = 15;
-const MIN_PEAK_INTERVAL = 500; // 500ms(120BPM)以上の動きはノイズとして無視
+const VERTICAL_ANGLE_THRESHOLD = 20;
+const MIN_PEAK_INTERVAL = 400; // 400ms(150BPM)以上の動きはノイズとして無視
+const SMOOTHING_FACTOR = 0.3;  // 座標スムージング係数 (0〜1, 小さいほど滑らか)
 
 // --- 状態管理 ---
 let currentState = 'intro';
@@ -20,6 +21,7 @@ let results_history = [];
 let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
+let smoothed_y = 0; // スムージング後の座標
 let y_direction = 0;
 
 // Web Audio API & Scheduler
@@ -75,6 +77,7 @@ function resetMeasurementUI() {
   results_history = [];
   bpm_list = [];
   last_y = 0;
+  smoothed_y = 0;
   last_peak_time = 0;
   if (timerElement) timerElement.classList.add('hidden');
   if (bpmDisplayElement) {
@@ -180,27 +183,30 @@ function analyzePose(landmarks) {
   const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
-  const angle = Math.abs(Math.atan2(elbow.x - shoulder.x, elbow.y - shoulder.y) * 180 / Math.PI);
-  const current_y = elbow.y;
+  // 1. 座標のスムージング (Exponential Moving Average)
+  if (smoothed_y === 0) smoothed_y = elbow.y;
+  else smoothed_y = (elbow.y * SMOOTHING_FACTOR) + (smoothed_y * (1 - SMOOTHING_FACTOR));
   
+  // 角度計算もスムージング後の値で (一瞬の傾きを無視)
+  const angle = Math.abs(Math.atan2(elbow.x - shoulder.x, smoothed_y - shoulder.y) * 180 / Math.PI);
+  
+  // 2. ピーク検知 (安定化版)
   if (last_y !== 0) {
-    const diff = current_y - last_y;
-    if (diff > 0.002 && y_direction !== 1) {
+    const diff = smoothed_y - last_y;
+    // ヒステリシス（遊び）を少し持たせる
+    if (diff > 0.003 && y_direction !== 1) {
       y_direction = 1;
-    } else if (diff < -0.002 && y_direction !== -1) {
+    } else if (diff < -0.003 && y_direction !== -1) {
       y_direction = -1;
-      const now = performance.now(); // Date.now() ではなく performance.now() を使用
+      const now = performance.now();
       if (last_peak_time !== 0) {
         const interval = now - last_peak_time;
-        // 300ms(200BPM)以下の極端に短い間隔は二重検知（ノイズ）として無視
+        // 150BPM(400ms)以上の極端に短い間隔は確実にノイズとして無視
         if (interval > MIN_PEAK_INTERVAL) {
           const bpm = 60000 / interval;
           if (bpm > 60 && bpm < 200) {
             bpm_list.push(bpm);
-            // リアルタイム表示を更新
-            if (bpmDisplayElement) {
-              bpmDisplayElement.innerText = `${Math.round(bpm)} BPM`;
-            }
+            updateStabilizedBPM();
           }
         }
       }
@@ -208,8 +214,16 @@ function analyzePose(landmarks) {
     }
   }
   
-  results_history.push({ angle, wristY: current_y, time: Date.now() });
-  last_y = current_y;
+  results_history.push({ angle, wristY: smoothed_y, time: Date.now() });
+  last_y = smoothed_y;
+}
+
+// 直近3回分のBPMの平均を表示して安定させる
+function updateStabilizedBPM() {
+  if (!bpmDisplayElement || bpm_list.length === 0) return;
+  const recentBPMs = bpm_list.slice(-3);
+  const avg = recentBPMs.reduce((a, b) => a + b, 0) / recentBPMs.length;
+  bpmDisplayElement.innerText = `${Math.round(avg)} BPM`;
 }
 
 function flashMetronome() {
@@ -269,7 +283,6 @@ function calculateResult() {
   const validAngles = results_history.filter(h => h.wristY > avgY).map(h => h.angle);
   const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
   
-  // 判定基準をわずかに広げる (98 - 122)
   const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
   const avgAngle = validAngles.length > 0 ? validAngles.reduce((a, b) => a + b, 0) / validAngles.length : 99;
   const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
