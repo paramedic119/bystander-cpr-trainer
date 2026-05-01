@@ -8,7 +8,7 @@ const TARGET_BPM_MIN = 98; // 許容範囲を少し広げる (100 -> 98)
 const TARGET_BPM_MAX = 122; // 許容範囲を少し広げる (120 -> 122)
 const METRONOME_BPM = 105;
 const VERTICAL_ANGLE_THRESHOLD = 15;
-const MIN_PEAK_INTERVAL = 400; // 400ms(150BPM)以上の動きはノイズとして無視
+const MIN_PEAK_INTERVAL = 500; // 500ms(120BPM)以上の動きはノイズとして無視
 
 // --- 状態管理 ---
 let currentState = 'intro';
