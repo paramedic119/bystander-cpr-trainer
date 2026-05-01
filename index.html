@@ -38,37 +38,40 @@
         background-color: var(--bg-color);
         color: var(--text-color);
         line-height: 1.6;
-        overflow-x: hidden;
+        overflow: hidden; /* スクロールを禁止 */
         -webkit-tap-highlight-color: transparent;
         display: flex;
         justify-content: center;
-        min-height: 100vh;
-        min-height: 100dvh;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
       }
 
       #app {
         width: 100%;
         max-width: 500px;
-        min-height: 100vh;
-        min-height: 100dvh;
+        height: 100%;
         display: flex;
         flex-direction: column;
         position: relative;
+        overflow: hidden;
       }
 
       .screen {
-        display: none; /* 初期状態は非表示 */
+        display: none;
         flex: 1;
         flex-direction: column;
         justify-content: center;
         align-items: center;
         padding: 1.5rem;
         width: 100%;
+        height: 100%;
+        overflow-y: auto; /* コンテンツが多い場合は内部スクロール */
         animation: fadeIn 0.3s ease-out;
       }
 
       .screen.active {
-        display: flex; /* activeクラスがついたものだけ表示 */
+        display: flex;
       }
 
       @keyframes fadeIn {
@@ -86,19 +89,10 @@
         text-align: center;
       }
 
-      h2 { font-size: 1.5rem; margin-bottom: 1.2rem; text-align: center; }
-
       .subtitle {
         color: var(--text-muted);
         margin-bottom: 1.5rem;
         font-size: 0.9rem;
-        text-align: center;
-      }
-
-      .note {
-        font-size: 0.85rem;
-        color: var(--danger-color);
-        margin-top: 1rem;
         text-align: center;
       }
 
@@ -108,7 +102,7 @@
         padding: 1.2rem;
         border-radius: 1.2rem;
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
         width: 100%;
       }
 
@@ -123,9 +117,7 @@
         transition: transform 0.1s;
         font-family: var(--font-main);
         margin-bottom: 0.8rem;
-        display: flex;
-        justify-content: center;
-        align-items: center;
+        flex-shrink: 0;
       }
 
       .btn-primary { background-color: var(--primary-color); color: #064e3b; }
@@ -134,41 +126,14 @@
 
       .btn-primary:active, .btn-secondary:active, .btn-danger:active { transform: scale(0.96); }
 
-      /* Guide Steps */
-      .guide-steps { width: 100%; }
-      .step {
-        display: flex;
-        align-items: center;
-        margin-bottom: 1rem;
-        background: rgba(255, 255, 255, 0.05);
-        padding: 0.8rem;
-        border-radius: 1rem;
-        text-align: left;
-      }
-
-      .step.warning { border-left: 4px solid var(--danger-color); }
-
-      .step-number {
-        background: var(--secondary-color);
-        color: white;
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        margin-right: 0.8rem;
-        flex-shrink: 0;
-        font-weight: bold;
-      }
-
-      /* Measurement Layout */
-      .full-screen { padding: 0 !important; }
+      /* Measurement Layout - 縦長画面対応 */
+      .full-screen { padding: 0 !important; overflow: hidden !important; }
 
       .camera-container {
         position: relative;
         width: 100%;
-        flex: 1;
+        flex: 1; /* 残りのスペースを全て使う */
+        min-height: 0; /* flexアイテムが縮小できるようにするために必須 */
         background: #000;
         overflow: hidden;
         display: flex;
@@ -176,34 +141,41 @@
         align-items: center;
       }
 
-      #input-video { display: none; }
-      #output-canvas { width: 100%; height: 100%; object-fit: contain; }
+      #output-canvas {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
 
       #status-overlay {
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
-        display: flex; flex-direction: column; justify-content: center; align-items: center;
         pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
       }
 
-      #countdown { font-size: 8rem; color: var(--primary-color); z-index: 100; font-weight: bold; }
+      #countdown { font-size: 8rem; color: var(--primary-color); font-weight: bold; }
       #timer {
-        position: absolute; top: 1.5rem; right: 1.5rem;
+        position: absolute; top: 1rem; right: 1rem;
         background: rgba(0, 0, 0, 0.6); padding: 0.4rem 1rem; border-radius: 2rem;
-        font-weight: bold; font-size: 1.1rem;
+        font-weight: bold; font-size: 1rem;
       }
 
       #metronome-visual {
-        position: absolute; bottom: 2rem;
-        width: 40px; height: 40px; background: var(--primary-color);
-        border-radius: 50%; box-shadow: 0 0 20px var(--primary-color);
+        position: absolute; bottom: 1rem;
+        width: 30px; height: 30px; background: var(--primary-color);
+        border-radius: 50%; box-shadow: 0 0 15px var(--primary-color);
       }
 
       .measure-controls {
         width: 100%;
-        padding: 1.2rem;
+        padding: 1rem 1.5rem;
         background: var(--bg-color);
         border-top: 1px solid rgba(255, 255, 255, 0.1);
+        flex-shrink: 0; /* このパネルは絶対に縮小させない */
       }
 
       .button-group-horizontal {
@@ -211,21 +183,20 @@
         gap: 0.8rem;
         width: 100%;
       }
-      .button-group-horizontal button { flex: 1; margin-bottom: 0; padding: 1rem; font-size: 0.95rem; }
+      .button-group-horizontal button { flex: 1; margin-bottom: 0; padding: 0.8rem; font-size: 0.9rem; }
 
       #processing-overlay {
         position: absolute;
         top: 50%; left: 50%; transform: translate(-50%, -50%);
         background: rgba(0, 0, 0, 0.8); padding: 1.5rem; border-radius: 1rem;
-        color: var(--primary-color); font-weight: bold; z-index: 200;
+        color: var(--primary-color); font-weight: bold;
       }
 
       /* Results */
-      .score-display { margin-bottom: 1rem; }
-      .rank { font-size: 5rem; display: block; line-height: 1; margin-bottom: 0.5rem; }
-      .rank-text { font-size: 1.3rem; color: var(--primary-color); font-weight: bold; }
-      .evaluation-details { width: 100%; margin-bottom: 1.5rem; }
-      .eval-item { display: flex; justify-content: space-between; padding: 0.8rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+      .rank { font-size: 4rem; display: block; line-height: 1; margin-bottom: 0.5rem; }
+      .rank-text { font-size: 1.2rem; color: var(--primary-color); font-weight: bold; margin-bottom: 1rem; }
+      .evaluation-details { width: 100%; margin-bottom: 1rem; }
+      .eval-item { display: flex; justify-content: space-between; padding: 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
       .status.pass { color: var(--primary-color); font-weight: bold; }
       .status.fail { color: var(--danger-color); font-weight: bold; }
 
@@ -252,7 +223,7 @@
       <!-- ガイド画面 -->
       <section id="screen-guide" class="screen">
         <div class="content">
-          <h2>撮影のポイント</h2>
+          <h2 style="margin-bottom:1rem;">撮影のポイント</h2>
           <div class="guide-steps">
             <div class="step">
               <div class="step-number">1</div>
@@ -275,7 +246,7 @@
       <!-- 計測画面 -->
       <section id="screen-measure" class="screen full-screen">
         <div class="camera-container">
-          <video id="input-video" playsinline muted></video>
+          <video id="input-video" playsinline muted style="display:none;"></video>
           <canvas id="output-canvas"></canvas>
           <div id="status-overlay">
             <div id="countdown" class="hidden">3</div>
@@ -285,7 +256,7 @@
           </div>
         </div>
         <div class="measure-controls">
-          <p id="instruction-text" style="text-align:center; margin-bottom: 0.8rem; font-size: 0.9rem;">姿勢を整えて「スタート」</p>
+          <p id="instruction-text" style="text-align:center; margin-bottom: 0.6rem; font-size: 0.85rem; color: var(--text-muted);">姿勢を整えて「スタート」</p>
           <div class="button-group-horizontal">
             <button id="btn-start" class="btn-primary">スタート</button>
             <button id="btn-stop" class="btn-danger hidden">中止</button>
@@ -314,8 +285,8 @@
             </div>
           </div>
           <div class="advice-card shadow">
-            <h3 style="margin-bottom:0.5rem; font-size:1rem;">アドバイス</h3>
-            <p id="advice-text" style="font-size:0.9rem;">その調子で頑張りましょう！</p>
+            <h3 style="margin-bottom:0.4rem; font-size:0.95rem;">アドバイス</h3>
+            <p id="advice-text" style="font-size:0.85rem;">その調子で頑張りましょう！</p>
           </div>
           <button id="btn-retry" class="btn-primary">もう一度練習する</button>
         </div>

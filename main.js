@@ -1,6 +1,6 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized");
+log("main.js initialized (Elbow tracking mode)");
 
 // --- 定数 ---
 const MEASURE_DURATION = 15;
@@ -171,10 +171,14 @@ function onResults(results) {
 }
 
 function analyzePose(landmarks) {
-  const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
+  // 肘（Elbow）を使用: 13 (左), 14 (右)
+  const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
-  const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
-  const current_y = wrist.y;
+  
+  // 垂直性の判定（肩から肘の角度）
+  const angle = Math.abs(Math.atan2(elbow.x - shoulder.x, elbow.y - shoulder.y) * 180 / Math.PI);
+  
+  const current_y = elbow.y;
   if (last_y !== 0) {
     const diff = current_y - last_y;
     if (diff > 0.002 && y_direction !== 1) y_direction = 1;
@@ -188,6 +192,7 @@ function analyzePose(landmarks) {
       last_peak_time = now;
     }
   }
+  
   results_history.push({ angle, wristY: current_y, time: Date.now() });
   last_y = current_y;
 }
@@ -197,7 +202,9 @@ function flashMetronome() {
 }
 
 async function startMeasurement() {
-  initAudio(); if (audioCtx.state === 'suspended') await audioCtx.resume();
+  log("startMeasurement called");
+  initAudio();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
   ['btn-start', 'btn-back-to-intro-from-measure', 'btn-switch-camera'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
   if (!isUploadedVideo) {
     if (countdownElement) countdownElement.classList.remove('hidden');
