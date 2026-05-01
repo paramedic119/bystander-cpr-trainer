@@ -1,8 +1,10 @@
-import './style.css';
-import confetti from 'canvas-confetti';
-
 // --- デバッグログ ---
-const log = (msg) => console.log(`[DEBUG] ${msg}`);
+const log = (msg) => {
+  console.log(`[DEBUG] ${msg}`);
+};
+
+// 起動直後のログを出力して、JSが動いているか確認
+log("main.js loaded and running");
 
 // --- 定数 ---
 const MEASURE_DURATION = 15;
@@ -39,7 +41,7 @@ const screens = {
 
 const videoElement = document.getElementById('input-video');
 const canvasElement = document.getElementById('output-canvas');
-const canvasCtx = canvasElement.getContext('2d');
+const canvasCtx = canvasElement ? canvasElement.getContext('2d') : null;
 const timerElement = document.getElementById('timer');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
@@ -48,32 +50,26 @@ const inputVideoFile = document.getElementById('input-video-file');
 
 // --- 画面遷移 ---
 function showScreen(screenName) {
-  log(`Switching screen to: ${screenName}`);
+  log(`showScreen called for: ${screenName}`);
   
-  // 全ての画面を非表示にする
   Object.keys(screens).forEach(key => {
-    if (screens[key]) {
-      screens[key].classList.remove('active');
-    }
+    if (screens[key]) screens[key].classList.remove('active');
   });
 
-  // 対象の画面を表示
   if (screens[screenName]) {
     screens[screenName].classList.add('active');
     currentState = screenName;
   } else {
-    log(`Error: Screen not found - ${screenName}`);
+    log(`Error: Screen ${screenName} not found`);
     return;
   }
 
-  // 画面ごとの初期化
   if (screenName === 'measure') {
     resetMeasurementUI();
-    if (!isUploadedVideo) {
-      startCamera();
-    } else {
+    if (!isUploadedVideo) startCamera();
+    else {
       videoElement.currentTime = 0;
-      instructionText.innerText = "動画の準備ができました。";
+      if (instructionText) instructionText.innerText = "動画の準備ができました。";
     }
   } else if (screenName === 'intro') {
     stopCamera();
@@ -83,13 +79,11 @@ function showScreen(screenName) {
 }
 
 function resetMeasurementUI() {
-  log("Resetting measurement UI");
   isMeasuring = false;
   results_history = [];
   bpm_list = [];
   last_y = 0;
   last_peak_time = 0;
-  y_direction = 0;
   
   if (timerElement) timerElement.classList.add('hidden');
   if (countdownElement) countdownElement.classList.add('hidden');
@@ -107,7 +101,6 @@ function resetMeasurementUI() {
 // --- メトロノーム ---
 function initAudio() {
   if (!audioCtx) {
-    log("Initializing AudioContext");
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 }
@@ -145,12 +138,8 @@ let lastComplexity = -1;
 
 function initPose(complexity) {
   if (pose && lastComplexity === complexity) return;
-  log(`Initializing Pose (complexity: ${complexity})`);
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
-  if (!PoseClass) {
-    log("Pose class not found!");
-    return;
-  }
+  if (!PoseClass) return;
 
   pose = new PoseClass({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -168,7 +157,6 @@ function initPose(complexity) {
 }
 
 function startCamera() {
-  log("Starting camera");
   initPose(0);
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass) return;
@@ -187,35 +175,31 @@ function startCamera() {
     height: 480,
     facingMode: currentFacingMode
   });
-  camera.start().catch(err => log(`Camera start failed: ${err}`));
+  camera.start().catch(err => log(err));
 }
 
 function stopCamera() {
-  if (camera) {
-    log("Stopping camera");
-    camera.stop();
-  }
+  if (camera) camera.stop();
 }
 
 async function startVideoFile(file) {
-  log("Starting video file analysis");
   isUploadedVideo = true;
   initPose(1);
   stopCamera();
-  
   const url = URL.createObjectURL(file);
   videoElement.src = url;
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
-    canvasElement.width = videoElement.videoWidth;
-    canvasElement.height = videoElement.videoHeight;
+    if (canvasElement) {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+    }
   };
   videoElement.load();
 }
 
 function stopVideoFile() {
   if (isUploadedVideo) {
-    log("Stopping video file");
     videoElement.pause();
     isUploadedVideo = false;
   }
@@ -226,31 +210,32 @@ function onResults(results) {
   if (!results.image) return;
   const w = results.image.width;
   const h = results.image.height;
-  if (w && h && (canvasElement.width !== w || canvasElement.height !== h)) {
+  if (canvasElement && w && h && (canvasElement.width !== w || canvasElement.height !== h)) {
     canvasElement.width = w;
     canvasElement.height = h;
   }
 
-  canvasCtx.save();
-  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-  canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-  
-  if (results.poseLandmarks) {
-    if (window.drawConnectors && window.drawLandmarks) {
-      window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
-      window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
+  if (canvasCtx) {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+    
+    if (results.poseLandmarks) {
+      if (window.drawConnectors && window.drawLandmarks) {
+        window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
+        window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
+      }
+      if (isMeasuring) analyzePose(results.poseLandmarks);
     }
-    if (isMeasuring) analyzePose(results.poseLandmarks);
+    canvasCtx.restore();
   }
-  canvasCtx.restore();
 }
 
 function analyzePose(landmarks) {
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
-  results_history.push({ angle, wristY: wrist.y, time: Date.now() });
-
+  
   const current_y = wrist.y;
   if (last_y !== 0) {
     const diff = current_y - last_y;
@@ -266,6 +251,8 @@ function analyzePose(landmarks) {
       last_peak_time = now;
     }
   }
+  
+  results_history.push({ angle, wristY: current_y, time: Date.now() });
   last_y = current_y;
 }
 
@@ -277,7 +264,7 @@ function flashMetronome() {
 }
 
 async function startMeasurement() {
-  log("Measurement started by user");
+  log("startMeasurement called");
   initAudio();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
 
@@ -291,21 +278,20 @@ async function startMeasurement() {
   if (btnSwitch) btnSwitch.classList.add('hidden');
   
   if (!isUploadedVideo) {
-    countdownElement.classList.remove('hidden');
+    if (countdownElement) countdownElement.classList.remove('hidden');
     for (let i = 3; i > 0; i--) {
-      countdownElement.innerText = i;
+      if (countdownElement) countdownElement.innerText = i;
       scheduleNote(audioCtx.currentTime);
       await new Promise(r => setTimeout(r, 1000));
     }
-    countdownElement.classList.add('hidden');
+    if (countdownElement) countdownElement.classList.add('hidden');
   }
 
   if (btnStop) btnStop.classList.remove('hidden');
-  
   isMeasuring = true;
   startTime = Date.now();
-  timerElement.classList.remove('hidden');
-  instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
+  if (timerElement) timerElement.classList.remove('hidden');
+  if (instructionText) instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
   
   nextNoteTime = audioCtx.currentTime;
   timerID = setInterval(scheduler, 25.0);
@@ -316,7 +302,7 @@ async function startMeasurement() {
       await videoElement.play();
       processVideoFrame();
     } catch (e) {
-      log(`Play failed: ${e}`);
+      log(e);
       stopMeasurement();
       return;
     }
@@ -333,7 +319,7 @@ async function startMeasurement() {
     } else {
       const remaining = MEASURE_DURATION - elapsed;
       if (remaining <= 0) { clearInterval(timerInterval); finishMeasurement(); }
-      timerElement.innerText = `00:${Math.max(0, remaining).toString().padStart(2, '0')}`;
+      if (timerElement) timerElement.innerText = `00:${Math.max(0, remaining).toString().padStart(2, '0')}`;
     }
   }, 1000);
 }
@@ -346,25 +332,25 @@ async function processVideoFrame() {
 }
 
 function stopMeasurement() {
-  log("Measurement stopped");
   isMeasuring = false;
   if (timerID) clearInterval(timerID);
-  
   resetMeasurementUI();
 }
 
 function finishMeasurement() {
-  log("Measurement finished normally");
   stopMeasurement();
   calculateResult();
   showScreen('result');
 }
 
 function calculateResult() {
-  log("Calculating final results");
+  // フィルタリング: 押し込んでいる時の角度のみを抽出
+  const avgY = results_history.length > 0 ? results_history.reduce((a, b) => a + b.wristY, 0) / results_history.length : 0;
+  const validAngles = results_history.filter(h => h.wristY > avgY).map(h => h.angle);
+
   const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
   const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
-  const avgAngle = results_history.length > 0 ? results_history.reduce((a, b) => a + b.angle, 0) / results_history.length : 99;
+  const avgAngle = validAngles.length > 0 ? validAngles.reduce((a, b) => a + b, 0) / validAngles.length : 99;
   const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
   
   const rankElement = document.querySelector('.rank');
@@ -385,60 +371,66 @@ function calculateResult() {
   if (isRhythmOk && isVerticalOk) {
     if (rankElement) rankElement.innerText = "◎";
     if (rankTextElement) rankTextElement.innerText = "完璧です！素晴らしい！";
-    if (adviceText) adviceText.innerText = "垂直に、正しいリズムで押せています。この感覚を忘れないようにしましょう。";
-    confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+    if (adviceText) adviceText.innerText = "垂直に、正しいリズムで押せています。その調子です。";
+    if (window.confetti) window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
   } else if (isRhythmOk || isVerticalOk) {
     if (rankElement) rankElement.innerText = "○";
     if (rankTextElement) rankTextElement.innerText = "あと一歩です！";
-    if (adviceText) adviceText.innerText = isRhythmOk ? 
-      "リズムはバッチリです！次はもう少し腕を真っ直ぐ、真上から押すことを意識してみましょう。" :
-      "押し方はとても綺麗です！次はメトロノームの音に合わせて、もう少しテンポを意識してみましょう。";
+    if (adviceText) adviceText.innerText = isRhythmOk ? "リズムはOK！次はもう少し腕を真っ直ぐに。" : "姿勢はOK！次はテンポを意識しましょう。";
   } else {
     if (rankElement) rankElement.innerText = "△";
-    if (rankTextElement) rankTextElement.innerText = "練習を続けましょう！";
-    if (adviceText) adviceText.innerText = "まずはリラックスして、メトロノームの音を聞きながら腕を真っ直ぐ伸ばすことから始めてみましょう。";
+    if (rankTextElement) rankTextElement.innerText = "練習あるのみ！";
+    if (adviceText) adviceText.innerText = "まずはリラックスして、メトロノームに合わせることから始めましょう。";
   }
 }
 
-// --- イベントリスナーの登録 ---
-const bindEvents = () => {
-  log("Binding event listeners");
-  
-  const clickActions = {
-    'btn-to-guide': () => { isUploadedVideo = false; showScreen('guide'); },
-    'btn-to-measure': () => showScreen('measure');
-    'btn-back-to-intro': () => showScreen('intro');
-    'btn-back-to-intro-from-measure': () => showScreen('intro');
-    'btn-start': startMeasurement;
-    'btn-stop': finishMeasurement;
-    'btn-retry': () => { log("Retry button clicked"); showScreen('measure'); },
-    'btn-switch-camera': () => {
+// --- イベントデリゲーション（最強のイベント管理） ---
+document.addEventListener('click', (e) => {
+  const targetId = e.target.closest('button')?.id || e.target.id;
+  if (!targetId) return;
+
+  log(`Document clicked: ${targetId}`);
+
+  switch (targetId) {
+    case 'btn-to-guide':
+      isUploadedVideo = false;
+      showScreen('guide');
+      break;
+    case 'btn-to-measure':
+      showScreen('measure');
+      break;
+    case 'btn-back-to-intro':
+    case 'btn-back-to-intro-from-measure':
+      showScreen('intro');
+      break;
+    case 'btn-start':
+      startMeasurement();
+      break;
+    case 'btn-stop':
+      finishMeasurement();
+      break;
+    case 'btn-retry':
+      log("Retry button recognized");
+      showScreen('measure');
+      break;
+    case 'btn-switch-camera':
       currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-      log(`Switching camera to: ${currentFacingMode}`);
       if (!isUploadedVideo) startCamera();
-    },
-    'btn-upload-trigger': () => inputVideoFile.click()
-  };
-
-  Object.keys(clickActions).forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.onclick = clickActions[id];
-    } else {
-      log(`Warning: Element for binding not found - ${id}`);
-    }
-  });
-
-  if (inputVideoFile) {
-    inputVideoFile.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) startVideoFile(file);
-    };
+      break;
+    case 'btn-upload-trigger':
+      if (inputVideoFile) inputVideoFile.click();
+      break;
   }
-};
+});
 
-// 初期起動
-bindEvents();
+if (inputVideoFile) {
+  inputVideoFile.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) startVideoFile(file);
+  });
+}
+
+// 初期化
 showScreen('intro');
 
 window.addEventListener('resize', () => {
