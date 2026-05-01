@@ -1,6 +1,6 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized (Stabilized Tracking Mode)");
+log("main.js initialized (Total Stabilization & Fair Evaluation)");
 
 // --- 定数 ---
 const MEASURE_DURATION = 15;
@@ -9,10 +9,9 @@ const TARGET_BPM_MAX = 122;
 const METRONOME_BPM = 105;
 const VERTICAL_ANGLE_THRESHOLD = 20;
 const MIN_PEAK_INTERVAL = 400; // 400ms(150BPM)以上の動きはノイズとして無視
-const SMOOTHING_FACTOR = 0.3;  // 座標スムージング係数 (0〜1, 小さいほど滑らか)
+const SMOOTHING_FACTOR = 0.3;  // 座標スムージング係数
 
 // --- 状態管理 ---
-let currentState = 'intro';
 let isMeasuring = false;
 let isUploadedVideo = false;
 let currentFacingMode = 'user';
@@ -21,8 +20,11 @@ let results_history = [];
 let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
-let smoothed_y = 0; // スムージング後の座標
 let y_direction = 0;
+
+// スムージング用座標保持
+let smoothed_elbow = { x: 0, y: 0 };
+let smoothed_shoulder = { x: 0, y: 0 };
 
 // Web Audio API & Scheduler
 let audioCtx = null;
@@ -51,24 +53,17 @@ const inputVideoFile = document.getElementById('input-video-file');
 // --- 画面遷移 ---
 function showScreen(screenName) {
   log(`showScreen: ${screenName}`);
-  Object.keys(screens).forEach(key => {
-    if (screens[key]) screens[key].classList.remove('active');
-  });
+  Object.keys(screens).forEach(key => screens[key]?.classList.remove('active'));
   if (screens[screenName]) {
     screens[screenName].classList.add('active');
-    currentState = screenName;
-  }
-  if (screenName === 'measure') {
-    resetMeasurementUI();
-    if (!isUploadedVideo) startCamera();
-    else {
-      videoElement.currentTime = 0;
-      if (instructionText) instructionText.innerText = "動画の準備ができました。";
+    if (screenName === 'measure') {
+      resetMeasurementUI();
+      if (!isUploadedVideo) startCamera();
+      else videoElement.currentTime = 0;
+    } else if (screenName === 'intro') {
+      stopCamera();
+      stopVideoFile();
     }
-  } else if (screenName === 'intro') {
-    stopCamera();
-    stopVideoFile();
-    stopMeasurement();
   }
 }
 
@@ -77,13 +72,11 @@ function resetMeasurementUI() {
   results_history = [];
   bpm_list = [];
   last_y = 0;
-  smoothed_y = 0;
   last_peak_time = 0;
+  smoothed_elbow = { x: 0, y: 0 };
+  smoothed_shoulder = { x: 0, y: 0 };
   if (timerElement) timerElement.classList.add('hidden');
-  if (bpmDisplayElement) {
-    bpmDisplayElement.classList.add('hidden');
-    bpmDisplayElement.innerText = "-- BPM";
-  }
+  if (bpmDisplayElement) { bpmDisplayElement.classList.add('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
   if (countdownElement) countdownElement.classList.add('hidden');
   ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'].forEach(id => {
     const el = document.getElementById(id);
@@ -92,13 +85,9 @@ function resetMeasurementUI() {
 }
 
 // --- メトロノーム ---
-function initAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-}
-
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function scheduleNote(time) {
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
+  const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
   osc.connect(gain); gain.connect(audioCtx.destination);
   osc.type = 'sine'; osc.frequency.setValueAtTime(880, time);
   gain.gain.setValueAtTime(0, time);
@@ -108,7 +97,6 @@ function scheduleNote(time) {
   const delay = (time - audioCtx.currentTime) * 1000;
   setTimeout(() => { if (isMeasuring) flashMetronome(); }, Math.max(0, delay));
 }
-
 function scheduler() {
   while (nextNoteTime < audioCtx.currentTime + scheduleAheadTime) {
     scheduleNote(nextNoteTime);
@@ -117,10 +105,7 @@ function scheduler() {
 }
 
 // --- MediaPipe Setup ---
-let pose = null;
-let camera = null;
-let lastComplexity = -1;
-
+let pose = null, camera = null, lastComplexity = -1;
 function initPose(complexity) {
   if (pose && lastComplexity === complexity) return;
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
@@ -132,8 +117,7 @@ function initPose(complexity) {
 }
 
 function startCamera() {
-  initPose(0);
-  const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
+  initPose(0); const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass) return;
   videoElement.pause(); videoElement.srcObject = null; videoElement.src = "";
   if (camera) camera.stop();
@@ -145,7 +129,6 @@ function startCamera() {
 }
 
 function stopCamera() { if (camera) camera.stop(); }
-
 async function startVideoFile(file) {
   isUploadedVideo = true; initPose(1); stopCamera();
   const url = URL.createObjectURL(file);
@@ -156,7 +139,6 @@ async function startVideoFile(file) {
   };
   videoElement.load();
 }
-
 function stopVideoFile() { if (isUploadedVideo) { videoElement.pause(); isUploadedVideo = false; } }
 
 function onResults(results) {
@@ -183,25 +165,29 @@ function analyzePose(landmarks) {
   const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
-  // 1. 座標のスムージング (Exponential Moving Average)
-  if (smoothed_y === 0) smoothed_y = elbow.y;
-  else smoothed_y = (elbow.y * SMOOTHING_FACTOR) + (smoothed_y * (1 - SMOOTHING_FACTOR));
+  // X・Y両軸のスムージング (肘と肩)
+  if (smoothed_elbow.y === 0) {
+    smoothed_elbow = { x: elbow.x, y: elbow.y };
+    smoothed_shoulder = { x: shoulder.x, y: shoulder.y };
+  } else {
+    smoothed_elbow.x = (elbow.x * SMOOTHING_FACTOR) + (smoothed_elbow.x * (1 - SMOOTHING_FACTOR));
+    smoothed_elbow.y = (elbow.y * SMOOTHING_FACTOR) + (smoothed_elbow.y * (1 - SMOOTHING_FACTOR));
+    smoothed_shoulder.x = (shoulder.x * SMOOTHING_FACTOR) + (smoothed_shoulder.x * (1 - SMOOTHING_FACTOR));
+    smoothed_shoulder.y = (shoulder.y * SMOOTHING_FACTOR) + (smoothed_shoulder.y * (1 - SMOOTHING_FACTOR));
+  }
   
-  // 角度計算もスムージング後の値で (一瞬の傾きを無視)
-  const angle = Math.abs(Math.atan2(elbow.x - shoulder.x, smoothed_y - shoulder.y) * 180 / Math.PI);
+  // 安定化した座標で角度を計算
+  const angle = Math.abs(Math.atan2(smoothed_elbow.x - smoothed_shoulder.x, smoothed_elbow.y - smoothed_shoulder.y) * 180 / Math.PI);
   
-  // 2. ピーク検知 (安定化版)
+  const current_y = smoothed_elbow.y;
   if (last_y !== 0) {
-    const diff = smoothed_y - last_y;
-    // ヒステリシス（遊び）を少し持たせる
-    if (diff > 0.003 && y_direction !== 1) {
-      y_direction = 1;
-    } else if (diff < -0.003 && y_direction !== -1) {
+    const diff = current_y - last_y;
+    if (diff > 0.003 && y_direction !== 1) y_direction = 1;
+    else if (diff < -0.003 && y_direction !== -1) {
       y_direction = -1;
       const now = performance.now();
       if (last_peak_time !== 0) {
         const interval = now - last_peak_time;
-        // 150BPM(400ms)以上の極端に短い間隔は確実にノイズとして無視
         if (interval > MIN_PEAK_INTERVAL) {
           const bpm = 60000 / interval;
           if (bpm > 60 && bpm < 200) {
@@ -213,12 +199,10 @@ function analyzePose(landmarks) {
       last_peak_time = now;
     }
   }
-  
-  results_history.push({ angle, wristY: smoothed_y, time: Date.now() });
-  last_y = smoothed_y;
+  results_history.push({ angle, wristY: current_y, time: Date.now() });
+  last_y = current_y;
 }
 
-// 直近3回分のBPMの平均を表示して安定させる
 function updateStabilizedBPM() {
   if (!bpmDisplayElement || bpm_list.length === 0) return;
   const recentBPMs = bpm_list.slice(-3);
@@ -226,9 +210,7 @@ function updateStabilizedBPM() {
   bpmDisplayElement.innerText = `${Math.round(avg)} BPM`;
 }
 
-function flashMetronome() {
-  if (metronomeVisual) { metronomeVisual.classList.remove('hidden'); setTimeout(() => metronomeVisual.classList.add('hidden'), 100); }
-}
+function flashMetronome() { if (metronomeVisual) { metronomeVisual.classList.remove('hidden'); setTimeout(() => metronomeVisual.classList.add('hidden'), 100); } }
 
 async function startMeasurement() {
   initAudio(); if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -241,10 +223,7 @@ async function startMeasurement() {
   document.getElementById('btn-stop')?.classList.remove('hidden');
   isMeasuring = true; startTime = Date.now();
   if (timerElement) timerElement.classList.remove('hidden');
-  if (bpmDisplayElement) {
-    bpmDisplayElement.classList.remove('hidden');
-    bpmDisplayElement.innerText = "-- BPM";
-  }
+  if (bpmDisplayElement) { bpmDisplayElement.classList.remove('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
   nextNoteTime = audioCtx.currentTime; timerID = setInterval(scheduler, 25.0);
   if (isUploadedVideo) {
     videoElement.currentTime = 0;
@@ -268,23 +247,26 @@ async function processVideoFrame() {
     requestAnimationFrame(processVideoFrame);
   }
 }
-
-function stopMeasurement() {
-  isMeasuring = false; if (timerID) clearInterval(timerID);
-  resetMeasurementUI();
-}
-
-function finishMeasurement() {
-  stopMeasurement(); calculateResult(); showScreen('result');
-}
+function stopMeasurement() { isMeasuring = false; if (timerID) clearInterval(timerID); resetMeasurementUI(); }
+function finishMeasurement() { stopMeasurement(); calculateResult(); showScreen('result'); }
 
 function calculateResult() {
-  const avgY = results_history.length > 0 ? results_history.reduce((a, b) => a + b.wristY, 0) / results_history.length : 0;
-  const validAngles = results_history.filter(h => h.wristY > avgY).map(h => h.angle);
-  const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
+  // --- 公平な評価ロジック ---
+  // 1. 最初と最後の各2個ずつのBPMデータ（不安定になりやすい）を除外
+  let fairBPMList = [...bpm_list];
+  if (fairBPMList.length > 6) {
+    fairBPMList = fairBPMList.slice(2, -2);
+  } else if (fairBPMList.length > 3) {
+    fairBPMList = fairBPMList.slice(1, -1);
+  }
   
+  const avgBPM = fairBPMList.length > 0 ? fairBPMList.reduce((a, b) => a + b, 0) / fairBPMList.length : 0;
   const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
-  const avgAngle = validAngles.length > 0 ? validAngles.reduce((a, b) => a + b, 0) / validAngles.length : 99;
+
+  // 2. 姿勢判定も中盤の安定した区間に絞る
+  const avgY = results_history.length > 0 ? results_history.reduce((a, b) => a + b.wristY, 0) / results_history.length : 0;
+  const validHistory = results_history.filter(h => h.wristY > avgY); // 押し込んでいる瞬間
+  const avgAngle = validHistory.length > 0 ? validHistory.reduce((a, b) => a + b.angle, 0) / validHistory.length : 99;
   const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
   
   const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm'), adviceText = document.getElementById('advice-text');
@@ -304,7 +286,6 @@ function calculateResult() {
 document.addEventListener('click', (e) => {
   const targetId = e.target.closest('button')?.id || e.target.id;
   if (!targetId) return;
-  log(`Click: ${targetId}`);
   switch (targetId) {
     case 'btn-to-guide': isUploadedVideo = false; showScreen('guide'); break;
     case 'btn-to-measure': showScreen('measure'); break;
@@ -317,7 +298,6 @@ document.addEventListener('click', (e) => {
     case 'btn-upload-trigger': if (inputVideoFile) inputVideoFile.click(); break;
   }
 });
-
-if (inputVideoFile) { inputVideoFile.addEventListener('change', (e) => { const file = e.target.files[0]; if (file) startVideoFile(file); }); }
+if (inputVideoFile) inputVideoFile.addEventListener('change', (e) => { const file = e.target.files[0]; if (file) startVideoFile(file); });
 showScreen('intro');
 window.addEventListener('resize', () => { if (!isUploadedVideo && canvasElement) { canvasElement.width = canvasElement.clientWidth; canvasElement.height = canvasElement.clientHeight; } });
