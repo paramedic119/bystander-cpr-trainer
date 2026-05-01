@@ -21,8 +21,8 @@ let y_direction = 0;
 
 // Web Audio API & Scheduler
 let audioCtx = null;
-let nextNoteTime = 0.0; // 次に音を鳴らす時間
-const scheduleAheadTime = 0.1; // 100ms先まで予約
+let nextNoteTime = 0.0;
+const scheduleAheadTime = 0.1;
 let timerID = null;
 
 // --- DOM要素 ---
@@ -40,7 +40,6 @@ const timerElement = document.getElementById('timer');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
 const instructionText = document.getElementById('instruction-text');
-const processingOverlay = document.getElementById('processing-overlay');
 const inputVideoFile = document.getElementById('input-video-file');
 
 // --- 画面遷移 ---
@@ -49,19 +48,37 @@ function showScreen(screenName) {
   screens[screenName].classList.add('active');
 
   if (screenName === 'measure') {
+    resetMeasurementData();
     if (!isUploadedVideo) {
       startCamera();
+    } else {
+      // 動画アップロードモードの場合は巻き戻しておく
+      videoElement.currentTime = 0;
+      instructionText.innerText = "動画の準備ができました。";
     }
-  } else {
-    if (screenName !== 'measure') {
-      stopCamera();
-      stopVideoFile();
-      stopMeasurement();
-    }
+  } else if (screenName === 'intro') {
+    // 最初の画面に戻る時は全てをクリーンアップ
+    stopCamera();
+    stopVideoFile();
+    stopMeasurement();
   }
 }
 
-// --- 高精度メトロノーム・スケジューラー ---
+function resetMeasurementData() {
+  isMeasuring = false;
+  results_history = [];
+  bpm_list = [];
+  last_y = 0;
+  last_peak_time = 0;
+  y_direction = 0;
+  timerElement.classList.add('hidden');
+  document.getElementById('btn-start').classList.remove('hidden');
+  document.getElementById('btn-stop').classList.add('hidden');
+  document.getElementById('btn-switch-camera').classList.remove('hidden');
+  document.getElementById('btn-back-to-intro-from-measure').classList.remove('hidden');
+}
+
+// --- メトロノーム ---
 function initAudio() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -81,11 +98,10 @@ function scheduleNote(time) {
   osc.start(time);
   osc.stop(time + 0.1);
 
-  // 視覚的なメトロノームも時間差で実行
   const delay = (time - audioCtx.currentTime) * 1000;
   setTimeout(() => {
-    if (isMeasuring || currentState === 'measure') flashMetronome();
-  }, delay);
+    if (isMeasuring) flashMetronome();
+  }, delay > 0 ? delay : 0);
 }
 
 function scheduler() {
@@ -101,9 +117,7 @@ let camera = null;
 let lastComplexity = -1;
 
 function initPose(complexity) {
-  // モデルの複雑さが変わる場合のみ再初期化
   if (pose && lastComplexity === complexity) return;
-  
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
   if (!PoseClass) return;
 
@@ -112,7 +126,7 @@ function initPose(complexity) {
   });
 
   pose.setOptions({
-    modelComplexity: complexity, // 0: Lite, 1: Full
+    modelComplexity: complexity,
     smoothLandmarks: true,
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5
@@ -123,11 +137,10 @@ function initPose(complexity) {
 }
 
 function startCamera() {
-  initPose(0); // カメラは速度優先 (Lite)
+  initPose(0);
   const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass || !pose) return;
 
-  videoElement.onerror = null;
   videoElement.pause();
   videoElement.srcObject = null;
   videoElement.src = "";
@@ -151,20 +164,15 @@ function stopCamera() {
 
 async function startVideoFile(file) {
   isUploadedVideo = true;
-  initPose(1); // 動画ファイルは精度優先 (Full)
+  initPose(1);
   stopCamera();
   videoElement.pause();
   videoElement.srcObject = null;
-  
-  videoElement.onerror = () => {
-    if (isUploadedVideo) alert('動画読み込みエラー');
-  };
   
   const url = URL.createObjectURL(file);
   videoElement.src = url;
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
-    instructionText.innerText = "動画を読み込みました。";
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
   };
@@ -175,10 +183,10 @@ function stopVideoFile() {
   if (isUploadedVideo) {
     videoElement.pause();
     if (videoElement.src) {
-      URL.revokeObjectURL(videoElement.src);
-      videoElement.src = "";
+      // ここではURLを解放せず、Introに戻る時のみ解放するように調整可能だが、
+      // メモリ管理のためIntroに戻る時に処理
+      isUploadedVideo = false;
     }
-    isUploadedVideo = false;
   }
 }
 
@@ -209,6 +217,7 @@ function onResults(results) {
 function analyzePose(landmarks) {
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
+  
   const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
   results_history.push({ angle, wristY: wrist.y, time: Date.now() });
 
@@ -236,14 +245,14 @@ function flashMetronome() {
 }
 
 async function startMeasurement() {
+  initAudio();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
   const btnSwitch = document.getElementById('btn-switch-camera');
   const btnBack = document.getElementById('btn-back-to-intro-from-measure');
   
-  initAudio();
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
-
   btnStart.classList.add('hidden');
   btnBack.classList.add('hidden');
   btnSwitch.classList.add('hidden');
@@ -252,23 +261,25 @@ async function startMeasurement() {
     countdownElement.classList.remove('hidden');
     for (let i = 3; i > 0; i--) {
       countdownElement.innerText = i;
-      scheduleNote(audioCtx.currentTime); // カウントダウン音
+      scheduleNote(audioCtx.currentTime);
       await new Promise(r => setTimeout(r, 1000));
     }
     countdownElement.classList.add('hidden');
   }
 
   btnStop.classList.remove('hidden');
-  isMeasuring = true;
-  startTime = Date.now();
+  
+  // 以前の計測データをリセット
   results_history = [];
   bpm_list = [];
   last_y = 0;
   last_peak_time = 0;
+  isMeasuring = true;
+  startTime = Date.now();
+
   timerElement.classList.remove('hidden');
   instructionText.innerText = isUploadedVideo ? "解析中..." : "その調子！続けてください";
   
-  // スケジューラー開始
   nextNoteTime = audioCtx.currentTime;
   timerID = setInterval(scheduler, 25.0);
 
