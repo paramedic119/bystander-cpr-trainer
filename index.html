@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/javascript.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>胸骨圧迫トレーニング - いのちを救う準備</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="app">
+      <!-- 導入画面 -->
+      <section id="screen-intro" class="screen active">
+        <div class="content">
+          <h1>いのちを救う練習</h1>
+          <p class="subtitle">胸骨圧迫トレーニングへようこそ</p>
+          <div class="card shadow">
+            <p>このアプリは、救急講習のあとの復習をサポートします。スマートフォンのカメラを使って、あなたの胸骨圧迫を優しくチェックします。</p>
+          </div>
+          <button id="btn-to-guide" class="btn-primary">はじめる</button>
+        </div>
+      </section>
+
+      <!-- ガイド画面 -->
+      <section id="screen-guide" class="screen">
+        <div class="content">
+          <h2>準備しましょう</h2>
+          <div class="guide-steps">
+            <div class="step">
+              <div class="step-number">1</div>
+              <p>クッションや枕を「患者さん」に見立てて床に置きます。</p>
+            </div>
+            <div class="step">
+              <div class="step-number">2</div>
+              <p>スマホをあなたの<strong>真横</strong>に、床から少し離して立てかけます。</p>
+            </div>
+            <div class="step">
+              <div class="step-number">3</div>
+              <p>全身（特に上半身）が画面に映るように調整してください。</p>
+            </div>
+          </div>
+          <button id="btn-to-measure" class="btn-primary">準備OK！</button>
+          <button id="btn-back-to-intro" class="btn-secondary">戻る</button>
+        </div>
+      </section>
+
+      <!-- 計測画面 -->
+      <section id="screen-measure" class="screen">
+        <div class="camera-container">
+          <video id="input-video" playsinline></video>
+          <canvas id="output-canvas"></canvas>
+          <div id="status-overlay">
+            <div id="countdown" class="hidden">3</div>
+            <div id="timer" class="hidden">00:15</div>
+            <div id="metronome-visual" class="hidden"></div>
+          </div>
+        </div>
+        <div class="controls">
+          <p id="instruction-text">姿勢を整えて「スタート」を押してください</p>
+          <div class="button-group">
+            <button id="btn-start" class="btn-primary">スタート</button>
+            <button id="btn-stop" class="btn-danger hidden">中止</button>
+            <button id="btn-back-to-guide" class="btn-secondary">戻る</button>
+          </div>
+        </div>
+        <audio id="audio-metronome" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3" preload="auto"></audio>
+      </section>
+
+      <!-- 結果画面 -->
+      <section id="screen-result" class="screen">
+        <div class="content">
+          <h2>練習お疲れ様でした！</h2>
+          <div id="result-score" class="score-display">
+            <span class="rank">◎</span>
+            <p class="rank-text">素晴らしいです！</p>
+          </div>
+          <div class="evaluation-details">
+            <div class="eval-item">
+              <span class="label">垂直押し</span>
+              <span id="eval-vertical" class="status">合格</span>
+            </div>
+            <div class="eval-item">
+              <span class="label">リズム</span>
+              <span id="eval-rhythm" class="status">合格</span>
+            </div>
+          </div>
+          <div class="advice-card shadow">
+            <h3>アドバイス</h3>
+            <p id="advice-text">その調子で頑張りましょう！</p>
+          </div>
+          <button id="btn-retry" class="btn-primary">もう一度練習する</button>
+        </div>
+      </section>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

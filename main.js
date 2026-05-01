@@ -1,0 +1,263 @@
+import './style.css';
+import { Pose } from '@mediapipe/pose';
+import { Camera } from '@mediapipe/camera_utils';
+import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
+import confetti from 'canvas-confetti';
+
+// --- 定数 ---
+const MEASURE_DURATION = 15; // 測定時間（秒）
+const TARGET_BPM_MIN = 100;
+const TARGET_BPM_MAX = 120;
+const VERTICAL_ANGLE_THRESHOLD = 15; // 垂直からの許容誤差（度）
+
+// --- 状態管理 ---
+let currentState = 'intro';
+let isMeasuring = false;
+let startTime = 0;
+let results_history = [];
+let metronomeInterval = null;
+let bpm_list = [];
+let last_peak_time = 0;
+let last_y = 0;
+let y_direction = 0; // 1: down, -1: up
+
+// --- DOM要素 ---
+const screens = {
+  intro: document.getElementById('screen-intro'),
+  guide: document.getElementById('screen-guide'),
+  measure: document.getElementById('screen-measure'),
+  result: document.getElementById('screen-result'),
+};
+
+const videoElement = document.getElementById('input-video');
+const canvasElement = document.getElementById('output-canvas');
+const canvasCtx = canvasElement.getContext('2d');
+const audioMetronome = document.getElementById('audio-metronome');
+const timerElement = document.getElementById('timer');
+const countdownElement = document.getElementById('countdown');
+const metronomeVisual = document.getElementById('metronome-visual');
+const instructionText = document.getElementById('instruction-text');
+
+// --- 画面遷移 ---
+function showScreen(screenName) {
+  Object.values(screens).forEach(s => s.classList.remove('active'));
+  screens[screenName].classList.add('active');
+  currentState = screenName;
+
+  if (screenName === 'measure') {
+    startCamera();
+  } else {
+    stopCamera();
+  }
+}
+
+// --- MediaPipe Setup ---
+const pose = new Pose({
+  locateFile: (file) => {
+    return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+  }
+});
+
+pose.setOptions({
+  modelComplexity: 1,
+  smoothLandmarks: true,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+
+pose.onResults(onResults);
+
+let camera = null;
+function startCamera() {
+  if (!camera) {
+    camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await pose.send({ image: videoElement });
+      },
+      width: 640,
+      height: 480
+    });
+  }
+  camera.start();
+}
+
+function stopCamera() {
+  if (camera) {
+    camera.stop();
+  }
+  stopMeasurement();
+}
+
+// --- 解析ロジック ---
+function onResults(results) {
+  // キャンバスの描画
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+  
+  if (results.poseLandmarks) {
+    drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 2 });
+    drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 1, radius: 5 });
+
+    if (isMeasuring) {
+      analyzePose(results.poseLandmarks);
+    }
+  }
+  canvasCtx.restore();
+}
+
+function analyzePose(landmarks) {
+  // 左手首(15)または右手首(16)のY座標を追跡（カメラに近い方を優先したいが、ここでは平均または片方）
+  const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
+  const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
+  
+  // 垂直性の判定: 肩と手首の角度
+  const angle = Math.abs(Math.atan2(wrist.x - shoulder.x, wrist.y - shoulder.y) * 180 / Math.PI);
+  results_history.push({ angle, wristY: wrist.y, time: Date.now() });
+
+  // リズム判定: ピーク検出
+  const current_y = wrist.y;
+  if (last_y !== 0) {
+    const diff = current_y - last_y;
+    if (diff > 0.002 && y_direction !== 1) { // 下降開始
+      y_direction = 1;
+    } else if (diff < -0.002 && y_direction !== -1) { // 上昇開始（底をついた）
+      y_direction = -1;
+      const now = Date.now();
+      if (last_peak_time !== 0) {
+        const bpm = 60000 / (now - last_peak_time);
+        if (bpm > 60 && bpm < 200) {
+          bpm_list.push(bpm);
+          flashMetronome();
+        }
+      }
+      last_peak_time = now;
+    }
+  }
+  last_y = current_y;
+}
+
+function flashMetronome() {
+  metronomeVisual.classList.remove('hidden');
+  setTimeout(() => metronomeVisual.classList.add('hidden'), 100);
+}
+
+// --- 計測コントロール ---
+async function startMeasurement() {
+  const btnStart = document.getElementById('btn-start');
+  const btnStop = document.getElementById('btn-stop');
+  const btnBack = document.getElementById('btn-back-to-guide');
+  
+  btnStart.classList.add('hidden');
+  btnBack.classList.add('hidden');
+  countdownElement.classList.remove('hidden');
+  
+  // カウントダウン
+  for (let i = 3; i > 0; i--) {
+    countdownElement.innerText = i;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  countdownElement.classList.add('hidden');
+  btnStop.classList.remove('hidden');
+  
+  // 計測開始
+  isMeasuring = true;
+  startTime = Date.now();
+  results_history = [];
+  bpm_list = [];
+  timerElement.classList.remove('hidden');
+  instructionText.innerText = "そのまま続けてください！";
+  
+  // メトロノーム開始
+  startMetronome();
+  
+  const timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const remaining = MEASURE_DURATION - elapsed;
+    if (remaining <= 0) {
+      clearInterval(timerInterval);
+      finishMeasurement();
+    }
+    timerElement.innerText = `00:${remaining.toString().padStart(2, '0')}`;
+  }, 1000);
+}
+
+function startMetronome() {
+  const interval = 60000 / 110; // 110 BPM
+  metronomeInterval = setInterval(() => {
+    audioMetronome.currentTime = 0;
+    audioMetronome.play().catch(() => {});
+  }, interval);
+}
+
+function stopMeasurement() {
+  isMeasuring = false;
+  clearInterval(metronomeInterval);
+  timerElement.classList.add('hidden');
+  document.getElementById('btn-start').classList.remove('hidden');
+  document.getElementById('btn-stop').classList.add('hidden');
+  document.getElementById('btn-back-to-guide').classList.remove('hidden');
+}
+
+function finishMeasurement() {
+  stopMeasurement();
+  calculateResult();
+  showScreen('result');
+}
+
+function calculateResult() {
+  // 平均BPM
+  const avgBPM = bpm_list.length > 0 ? bpm_list.reduce((a, b) => a + b, 0) / bpm_list.length : 0;
+  const isRhythmOk = avgBPM >= TARGET_BPM_MIN && avgBPM <= TARGET_BPM_MAX;
+  
+  // 垂直性（平均角度）
+  const avgAngle = results_history.length > 0 ? results_history.reduce((a, b) => a + b.angle, 0) / results_history.length : 99;
+  const isVerticalOk = avgAngle <= VERTICAL_ANGLE_THRESHOLD;
+  
+  const rankElement = document.querySelector('.rank');
+  const rankTextElement = document.querySelector('.rank-text');
+  const evalVertical = document.getElementById('eval-vertical');
+  const evalRhythm = document.getElementById('eval-rhythm');
+  const adviceText = document.getElementById('advice-text');
+  
+  evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！";
+  evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`;
+  evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！";
+  evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`;
+  
+  if (isRhythmOk && isVerticalOk) {
+    rankElement.innerText = "◎";
+    rankTextElement.innerText = "完璧です！素晴らしい！";
+    adviceText.innerText = "垂直に、正しいリズムで押せています。この感覚を忘れないようにしましょう。";
+    confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+  } else if (isRhythmOk || isVerticalOk) {
+    rankElement.innerText = "○";
+    rankTextElement.innerText = "あと一歩です！";
+    adviceText.innerText = isRhythmOk ? 
+      "リズムはバッチリです！次はもう少し腕を真っ直ぐ、真上から押すことを意識してみましょう。" :
+      "押し方はとても綺麗です！次はメトロノームの音に合わせて、もう少しテンポを意識してみましょう。";
+  } else {
+    rankElement.innerText = "△";
+    rankTextElement.innerText = "練習を続けましょう！";
+    adviceText.innerText = "まずはリラックスして、メトロノームの音を聞きながら腕を真っ直ぐ伸ばすことから始めてみましょう。";
+  }
+}
+
+// --- イベントリスナー ---
+document.getElementById('btn-to-guide').onclick = () => showScreen('guide');
+document.getElementById('btn-to-measure').onclick = () => showScreen('measure');
+document.getElementById('btn-back-to-intro').onclick = () => showScreen('intro');
+document.getElementById('btn-back-to-guide').onclick = () => showScreen('guide');
+document.getElementById('btn-start').onclick = startMeasurement;
+document.getElementById('btn-stop').onclick = finishMeasurement;
+document.getElementById('btn-retry').onclick = () => showScreen('measure');
+
+// 初期表示
+showScreen('intro');
+
+// Canvasのサイズ調整
+window.addEventListener('resize', () => {
+  canvasElement.width = canvasElement.clientWidth;
+  canvasElement.height = canvasElement.clientHeight;
+});
+window.dispatchEvent(new Event('resize'));
