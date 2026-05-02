@@ -175,6 +175,13 @@ function onResults(results) {
 }
 
 function analyzePose(landmarks, width, height, image) {
+  // 保存済み動画の場合、前後3秒を解析から除外
+  if (isUploadedVideo) {
+    const cur = videoElement.currentTime;
+    const dur = videoElement.duration;
+    if (cur < 3 || cur > (dur - 3)) return; // 判定対象外の時間帯はスキップ
+  }
+
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
 
