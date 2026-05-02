@@ -1,36 +1,34 @@
 // --- デバッグログ ---
 const log = (msg) => console.log(`[DEBUG] ${msg}`);
-log("main.js initialized (Production Final)");
+log("main.js initialized (Clean Refactor)");
 
-// --- 定数 (◎確約・環境誤差完全吸収設定) ---
+// --- 定数 ---
 const MEASURE_DURATION = 15;
-const TARGET_BPM_MIN = 70;  // 非常に寛容な設定 (実力があれば確実に合格)
-const TARGET_BPM_MAX = 150; 
-const METRONOME_BPM = 105;
-const VERTICAL_ANGLE_THRESHOLD = 20; // 閾値を20度に厳格化
+const TARGET_BPM_MIN = 100; // ガイドライン準拠 (100-120)
+const TARGET_BPM_MAX = 120;
+const METRONOME_BPM = 110;  // 推奨テンポ
+const VERTICAL_ANGLE_THRESHOLD = 20; // 20度以内が合格
 const MIN_PEAK_INTERVAL = 400; 
-const SMOOTHING_FACTOR = 0.5;
+const SMOOTHING_FACTOR = 0.4;
+
+// --- 解析用データ (計測ごとにリセット) ---
+let results_history = [];
+let bpm_list = [];
+let max_wrist_y = 0;
+let best_posture_frame = null;
 
 // --- 状態管理 ---
 let isMeasuring = false;
 let isUploadedVideo = false;
 let currentFacingMode = 'user';
 let startTime = 0;
-let results_history = [];
-let bpm_list = [];
 let last_peak_time = 0;
 let last_y = 0;
 let y_direction = 0;
-let smoothed_elbow = { x: 0, y: 0 };
 let smoothed_shoulder = { x: 0, y: 0 };
-let smoothed_wrist = { x: 0, y: 0 }; // 手首の平滑化座標を追加
+let smoothed_wrist = { x: 0, y: 0 };
 
-// 静止画キャプチャ用
-let best_posture_frame = null; 
-let max_wrist_y = 0;
-let shouldCaptureFrame = false; // フレーム保存フラグを追加
-
-// Web Audio API & Scheduler
+// --- Web Audio API ---
 let audioCtx = null;
 let nextNoteTime = 0.0;
 const scheduleAheadTime = 0.1;
@@ -51,40 +49,51 @@ const timerElement = document.getElementById('timer');
 const bpmDisplayElement = document.getElementById('current-bpm-display');
 const countdownElement = document.getElementById('countdown');
 const metronomeVisual = document.getElementById('metronome-visual');
-const instructionText = document.getElementById('instruction-text');
 const inputVideoFile = document.getElementById('input-video-file');
 
-// --- 画面遷移 ---
-function showScreen(screenName) {
-  Object.keys(screens).forEach(key => screens[key]?.classList.remove('active'));
-  if (screens[screenName]) {
-    screens[screenName].classList.add('active');
-    if (screenName === 'measure') {
-      resetMeasurementUI();
-      if (!isUploadedVideo) startCamera();
-      else videoElement.currentTime = 0;
-    } else if (screenName === 'intro') {
-      stopCamera(); stopVideoFile();
-    }
-  }
-}
+// --- 1. 初期化ロジック ---
 
-function resetMeasurementUI() {
-  isMeasuring = false; results_history = []; bpm_list = []; last_y = 0; last_peak_time = 0;
-  smoothed_elbow = { x: 0, y: 0 }; smoothed_shoulder = { x: 0, y: 0 };
-  if (timerElement) timerElement.classList.add('hidden');
-  if (bpmDisplayElement) { bpmDisplayElement.classList.add('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
-  if (countdownElement) countdownElement.classList.add('hidden');
-  document.getElementById('posture-check-container')?.classList.add('hidden'); // 静止画コンテナを隠す
+function resetAnalysisData() {
+  log("Resetting analysis data...");
+  results_history = [];
+  bpm_list = [];
   max_wrist_y = 0;
   best_posture_frame = null;
+  last_peak_time = 0;
+  last_y = 0;
+  y_direction = 0;
+  smoothed_shoulder = { x: 0, y: 0 };
+  smoothed_wrist = { x: 0, y: 0 };
+}
+
+function resetUI() {
+  if (timerElement) timerElement.innerText = "00:15";
+  if (bpmDisplayElement) bpmDisplayElement.innerText = "-- BPM";
+  document.getElementById('posture-check-container')?.classList.add('hidden');
+  
   ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('hidden', id === 'btn-stop');
   });
 }
 
-// --- メトロノーム ---
+// --- 2. 画面遷移 ---
+
+function showScreen(screenName) {
+  Object.keys(screens).forEach(key => screens[key]?.classList.remove('active'));
+  if (screens[screenName]) {
+    screens[screenName].classList.add('active');
+    if (screenName === 'measure') {
+      resetUI();
+      if (!isUploadedVideo) startCamera();
+    } else if (screenName === 'intro') {
+      stopCamera(); stopVideoFile();
+    }
+  }
+}
+
+// --- 3. メトロノーム ---
+
 function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function scheduleNote(time) {
   const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
@@ -102,21 +111,23 @@ function scheduler() {
     scheduleNote(nextNoteTime); nextNoteTime += 60.0 / METRONOME_BPM;
   }
 }
+function flashMetronome() { if (metronomeVisual) { metronomeVisual.classList.remove('hidden'); setTimeout(() => metronomeVisual.classList.add('hidden'), 100); } }
 
-// --- MediaPipe Setup ---
-let pose = null, camera = null, lastComplexity = -1;
-function initPose(complexity) {
-  if (pose && lastComplexity === complexity) return;
+// --- 4. MediaPipe & Camera ---
+
+let pose = null, camera = null;
+function initPose() {
+  if (pose) return;
   const PoseClass = window.Pose || (window.mediapipe && window.mediapipe.Pose);
   if (!PoseClass) return;
   pose = new PoseClass({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}` });
-  pose.setOptions({ modelComplexity: complexity, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+  pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
   pose.onResults(onResults);
-  lastComplexity = complexity;
 }
 
 function startCamera() {
-  initPose(0); const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
+  initPose();
+  const CameraClass = window.Camera || (window.mediapipe && window.mediapipe.Camera);
   if (!CameraClass) return;
   videoElement.pause(); videoElement.srcObject = null; videoElement.src = "";
   if (camera) camera.stop();
@@ -124,14 +135,14 @@ function startCamera() {
     onFrame: async () => { if (pose && !isUploadedVideo) await pose.send({ image: videoElement }); },
     width: 640, height: 480, facingMode: currentFacingMode
   });
-  camera.start().catch(err => log(err));
+  camera.start();
 }
 
 function stopCamera() { if (camera) camera.stop(); }
+
 async function startVideoFile(file) {
-  isUploadedVideo = true; initPose(1); stopCamera();
-  const url = URL.createObjectURL(file);
-  videoElement.src = url;
+  isUploadedVideo = true; initPose(); stopCamera();
+  videoElement.src = URL.createObjectURL(file);
   videoElement.onloadedmetadata = () => {
     showScreen('measure');
     if (canvasElement) { canvasElement.width = videoElement.videoWidth; canvasElement.height = videoElement.videoHeight; }
@@ -140,140 +151,123 @@ async function startVideoFile(file) {
 }
 function stopVideoFile() { if (isUploadedVideo) { videoElement.pause(); isUploadedVideo = false; } }
 
+// --- 5. 解析コアロジック ---
+
 function onResults(results) {
-  if (!results.image) return;
+  if (!results.image || !canvasCtx) return;
   const w = results.image.width, h = results.image.height;
-  if (canvasElement && w && h && (canvasElement.width !== w || canvasElement.height !== h)) {
+  if (canvasElement.width !== w || canvasElement.height !== h) {
     canvasElement.width = w; canvasElement.height = h;
   }
-  if (canvasCtx) {
-    canvasCtx.save(); canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-    if (results.poseLandmarks) {
-      if (window.drawConnectors && window.drawLandmarks) {
-        window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
-        window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
-      }
-      if (isMeasuring) analyzePose(results.poseLandmarks, results.image.width, results.image.height);
-      
-      // 代表フレームの保存（analyzePoseでフラグが立った場合）
-      if (shouldCaptureFrame && results.image) {
-        const offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = results.image.width;
-        offscreenCanvas.height = results.image.height;
-        const offscreenCtx = offscreenCanvas.getContext('2d');
-        offscreenCtx.drawImage(results.image, 0, 0);
-        best_posture_frame = {
-          image: offscreenCanvas,
-          landmarks: results.poseLandmarks,
-          angle: last_calculated_angle // その瞬間の角度を保存
-        };
-        shouldCaptureFrame = false;
-      }
+  
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, w, h);
+  canvasCtx.drawImage(results.image, 0, 0, w, h);
+  
+  if (results.poseLandmarks) {
+    if (window.drawConnectors) {
+      window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16]], { color: '#ffffff', lineWidth: 4 });
+      window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', radius: 6 });
     }
-    canvasCtx.restore();
+    if (isMeasuring) analyzePose(results.poseLandmarks, w, h, results.image);
   }
+  canvasCtx.restore();
 }
 
-let last_calculated_angle = 0; // 最新の計算角度を保持する変数
-
-function analyzePose(landmarks, width, height) {
-  const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
+function analyzePose(landmarks, width, height, image) {
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
-  
-  if (smoothed_elbow.y === 0) {
-    smoothed_elbow = { x: elbow.x, y: elbow.y };
-    smoothed_shoulder = { x: shoulder.x, y: shoulder.y };
-  } else {
-    smoothed_elbow.x = (elbow.x * SMOOTHING_FACTOR) + (smoothed_elbow.x * (1 - SMOOTHING_FACTOR));
-    smoothed_elbow.y = (elbow.y * SMOOTHING_FACTOR) + (smoothed_elbow.y * (1 - SMOOTHING_FACTOR));
-    smoothed_shoulder.x = (shoulder.x * SMOOTHING_FACTOR) + (smoothed_shoulder.x * (1 - SMOOTHING_FACTOR));
-    smoothed_shoulder.y = (shoulder.y * SMOOTHING_FACTOR) + (smoothed_shoulder.y * (1 - SMOOTHING_FACTOR));
-  }
-  
   const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
-  if (smoothed_wrist.y === 0) {
+
+  // スムージング
+  if (smoothed_shoulder.x === 0) {
+    smoothed_shoulder = { x: shoulder.x, y: shoulder.y };
     smoothed_wrist = { x: wrist.x, y: wrist.y };
   } else {
-    smoothed_wrist.x = (wrist.x * SMOOTHING_FACTOR) + (smoothed_wrist.x * (1 - SMOOTHING_FACTOR));
-    smoothed_wrist.y = (wrist.y * SMOOTHING_FACTOR) + (smoothed_wrist.y * (1 - SMOOTHING_FACTOR));
+    smoothed_shoulder.x = shoulder.x * SMOOTHING_FACTOR + smoothed_shoulder.x * (1 - SMOOTHING_FACTOR);
+    smoothed_shoulder.y = shoulder.y * SMOOTHING_FACTOR + smoothed_shoulder.y * (1 - SMOOTHING_FACTOR);
+    smoothed_wrist.x = wrist.x * SMOOTHING_FACTOR + smoothed_wrist.x * (1 - SMOOTHING_FACTOR);
+    smoothed_wrist.y = wrist.y * SMOOTHING_FACTOR + smoothed_wrist.y * (1 - SMOOTHING_FACTOR);
   }
-  
-  // 肩と手首の角度を計算（垂直なら0度）
-  // 画面のアスペクト比を考慮するため、ピクセル単位の差分で計算
+
+  // 角度計算 (垂直=0度)
   const dx = (smoothed_wrist.x - smoothed_shoulder.x) * width;
   const dy = (smoothed_wrist.y - smoothed_shoulder.y) * height;
   const angle = Math.abs(Math.atan2(dx, dy) * 180 / Math.PI);
-  last_calculated_angle = angle;
   
-  const current_y = smoothed_wrist.y; // 手首の位置でリズムを判定
+  results_history.push({ angle, wristY: smoothed_wrist.y });
 
-  // 最も深く押し込んだ瞬間を代表フレームとして保存
-  if (current_y > max_wrist_y) {
-    max_wrist_y = current_y;
-    // 注：実際の画像データは onResults の results.image から取得する必要があるため、
-    // ここではフラグを立てて onResults 側で保存する。
-    shouldCaptureFrame = true;
-  }
-  
+  // リズム判定（手首のY座標のピーク）
+  const current_y = smoothed_wrist.y;
   if (last_y !== 0) {
     const diff = current_y - last_y;
-    if (diff > 0.003 && y_direction !== 1) y_direction = 1;
+    if (diff > 0.003 && y_direction !== 1) y_direction = 1; // 押し込み開始
     else if (diff < -0.003 && y_direction !== -1) {
-      y_direction = -1;
-      // 動画時は再生時間、カメラ時は実時間で計算（遅延耐性）
+      y_direction = -1; // 切り返し地点
       const now = isUploadedVideo ? videoElement.currentTime * 1000 : performance.now();
       if (last_peak_time !== 0) {
         const interval = now - last_peak_time;
         if (interval > MIN_PEAK_INTERVAL) {
           const bpm = 60000 / interval;
-          if (bpm > 60 && bpm < 250) {
+          if (bpm > 60 && bpm < 200) {
             bpm_list.push(bpm);
-            updateStabilizedBPM();
+            if (bpmDisplayElement) {
+              const avg = bpm_list.slice(-3).reduce((a, b) => a + b, 0) / Math.min(bpm_list.length, 3);
+              bpmDisplayElement.innerText = `${Math.round(avg)} BPM`;
+            }
           }
         }
       }
       last_peak_time = now;
+      
+      // 最深部でのフレーム保存（姿勢チェック用）
+      if (current_y > max_wrist_y) {
+        max_wrist_y = current_y;
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = width; offCanvas.height = height;
+        offCanvas.getContext('2d').drawImage(image, 0, 0);
+        best_posture_frame = { image: offCanvas, angle: angle, landmarks: landmarks };
+      }
     }
   }
-  results_history.push({ angle, wristY: current_y, time: Date.now() });
   last_y = current_y;
 }
 
-function updateStabilizedBPM() {
-  if (!bpmDisplayElement || bpm_list.length === 0) return;
-  const recentBPMs = bpm_list.slice(-3);
-  const avg = recentBPMs.reduce((a, b) => a + b, 0) / recentBPMs.length;
-  bpmDisplayElement.innerText = `${Math.round(avg)} BPM`;
-}
-
-function flashMetronome() { if (metronomeVisual) { metronomeVisual.classList.remove('hidden'); setTimeout(() => metronomeVisual.classList.add('hidden'), 100); } }
+// --- 6. 計測フロー制御 ---
 
 async function startMeasurement() {
   initAudio(); if (audioCtx.state === 'suspended') await audioCtx.resume();
+  resetAnalysisData(); // ★ここでクリーンにリセット
+  
   ['btn-start', 'btn-back-to-intro-from-measure', 'btn-switch-camera'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+  
   if (!isUploadedVideo) {
-    if (countdownElement) countdownElement.classList.remove('hidden');
-    for (let i = 3; i > 0; i--) { if (countdownElement) countdownElement.innerText = i; scheduleNote(audioCtx.currentTime); await new Promise(r => setTimeout(r, 1000)); }
-    if (countdownElement) countdownElement.classList.add('hidden');
+    if (countdownElement) {
+      countdownElement.classList.remove('hidden');
+      for (let i = 3; i > 0; i--) { countdownElement.innerText = i; scheduleNote(audioCtx.currentTime); await new Promise(r => setTimeout(r, 1000)); }
+      countdownElement.classList.add('hidden');
+    }
   }
+  
   document.getElementById('btn-stop')?.classList.remove('hidden');
   isMeasuring = true; startTime = Date.now();
-  if (timerElement) timerElement.classList.remove('hidden');
-  if (bpmDisplayElement) { bpmDisplayElement.classList.remove('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
-  nextNoteTime = audioCtx.currentTime; timerID = setInterval(scheduler, 25.0);
+  nextNoteTime = audioCtx.currentTime;
+  timerID = setInterval(scheduler, 25.0);
+  
   if (isUploadedVideo) {
     videoElement.currentTime = 0;
-    try { await videoElement.play(); processVideoFrame(); } catch (e) { stopMeasurement(); return; }
+    videoElement.play();
+    processVideoFrame();
   }
+
   const timerInterval = setInterval(() => {
     if (!isMeasuring) { clearInterval(timerInterval); return; }
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    if (isUploadedVideo) { if (videoElement.ended) { clearInterval(timerInterval); finishMeasurement(); } }
-    else {
+    if (isUploadedVideo) {
+      if (videoElement.ended) { clearInterval(timerInterval); finishMeasurement(); }
+    } else {
       const remaining = MEASURE_DURATION - elapsed;
-      if (remaining <= 0) { clearInterval(timerInterval); finishMeasurement(); }
       if (timerElement) timerElement.innerText = `00:${Math.max(0, remaining).toString().padStart(2, '0')}`;
+      if (remaining <= 0) { clearInterval(timerInterval); finishMeasurement(); }
     }
   }, 1000);
 }
@@ -284,8 +278,22 @@ async function processVideoFrame() {
     requestAnimationFrame(processVideoFrame);
   }
 }
-function stopMeasurement() { isMeasuring = false; if (timerID) clearInterval(timerID); resetMeasurementUI(); }
-function finishMeasurement() { stopMeasurement(); calculateResult(); showScreen('result'); }
+
+function finishMeasurement() {
+  log("Finishing measurement and calculating results...");
+  calculateResult(); // ★先に判定を行う
+  stopMeasurement(); // その後停止
+  showScreen('result');
+}
+
+function stopMeasurement() {
+  isMeasuring = false;
+  if (timerID) clearInterval(timerID);
+  if (isUploadedVideo) videoElement.pause();
+  ['btn-stop'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+}
+
+// --- 7. 判定・結果表示 ---
 
 function getMedian(arr) {
   if (arr.length === 0) return 0;
@@ -297,93 +305,63 @@ function getMedian(arr) {
 function calculateResult() {
   const medianBPM = getMedian(bpm_list);
   const isRhythmOk = medianBPM >= TARGET_BPM_MIN && medianBPM <= TARGET_BPM_MAX;
+  
   const angles = results_history.map(h => h.angle);
   const medianAngle = getMedian(angles);
-  
-  // 判定ロジックの強化：中央値が閾値内、かつ最深部の角度も閾値内であることを条件とする
   const peakAngle = best_posture_frame ? best_posture_frame.angle : medianAngle;
-  const isVerticalOk = (medianAngle <= VERTICAL_ANGLE_THRESHOLD) && (peakAngle <= VERTICAL_ANGLE_THRESHOLD);
   
-  const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm');
-  if (evalVertical) { evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！"; evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`; }
-  if (evalRhythm) { evalRhythm.innerText = isRhythmOk ? "合格" : "もう少し！"; evalRhythm.className = `status ${isRhythmOk ? 'pass' : 'fail'}`; }
+  // 厳格な姿勢判定: 中央値と代表値の両方が閾値内であること
+  const isVerticalOk = (medianAngle > 0) && (medianAngle <= VERTICAL_ANGLE_THRESHOLD) && (peakAngle <= VERTICAL_ANGLE_THRESHOLD);
+  
+  log(`Results: BPM=${medianBPM}, Angle(Med)=${medianAngle}, Angle(Peak)=${peakAngle}`);
+
+  const rankEl = document.querySelector('.rank'), rankTextEl = document.querySelector('.rank-text'), evalV = document.getElementById('eval-vertical'), evalR = document.getElementById('eval-rhythm');
+  
+  if (evalV) { evalV.innerText = isVerticalOk ? "合格" : "もう少し！"; evalV.className = `status ${isVerticalOk ? 'pass' : 'fail'}`; }
+  if (evalR) { evalR.innerText = isRhythmOk ? "合格" : "もう少し！"; evalR.className = `status ${isRhythmOk ? 'pass' : 'fail'}`; }
   
   if (isRhythmOk && isVerticalOk) {
-    if (rankElement) rankElement.innerText = "◎"; if (rankTextElement) rankTextElement.innerText = "完璧です！素晴らしい！";
+    rankEl.innerText = "◎"; rankTextEl.innerText = "完璧です！素晴らしい！";
     if (window.confetti) window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
   } else if (isRhythmOk || isVerticalOk) {
-    if (rankElement) rankElement.innerText = "○"; if (rankTextElement) rankTextElement.innerText = "あと一歩です！";
+    rankEl.innerText = "○"; rankTextEl.innerText = "あと一歩です！";
   } else {
-    if (rankElement) rankElement.innerText = "△"; if (rankTextElement) rankTextElement.innerText = "練習あるのみ！";
+    rankEl.innerText = "△"; rankTextEl.innerText = "練習あるのみ！";
   }
 
-  // 静止画を描画
   if (best_posture_frame) {
-    const postureCanvas = document.getElementById('posture-canvas');
-    const container = document.getElementById('posture-check-container');
-    if (postureCanvas && container) {
-      container.classList.remove('hidden');
-      const ctx = postureCanvas.getContext('2d');
-      postureCanvas.width = best_posture_frame.image.width;
-      postureCanvas.height = best_posture_frame.image.height;
+    const pc = document.getElementById('posture-canvas'), pct = document.getElementById('posture-check-container');
+    if (pc && pct) {
+      pct.classList.remove('hidden');
+      pc.width = best_posture_frame.image.width; pc.height = best_posture_frame.image.height;
+      const ctx = pc.getContext('2d');
       ctx.drawImage(best_posture_frame.image, 0, 0);
-      
-      // ガイド線の描画
       const lm = best_posture_frame.landmarks;
       const s = lm[11].visibility > lm[12].visibility ? lm[11] : lm[12];
       const w = lm[15].visibility > lm[16].visibility ? lm[15] : lm[16];
-      
-      const sx = s.x * postureCanvas.width;
-      const sy = s.y * postureCanvas.height;
-      const wx = w.x * postureCanvas.width;
-      const wy = w.y * postureCanvas.height;
-      
-      // 肩から手首への実線
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(wx, wy);
-      // このフレーム単体の角度で色を決定（見た目と一致させる）
-      const frameVerticalOk = best_posture_frame.angle <= VERTICAL_ANGLE_THRESHOLD;
-      ctx.strokeStyle = frameVerticalOk ? '#4ade80' : '#f87171';
-      ctx.lineWidth = 6;
-      ctx.stroke();
-      
-      // 垂直ガイドライン（点線）
-      ctx.beginPath();
-      ctx.setLineDash([5, 5]);
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx, wy);
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 肩と手首のマーカー
-      ctx.beginPath();
-      ctx.arc(sx, sy, 8, 0, 2 * Math.PI);
-      ctx.arc(wx, wy, 8, 0, 2 * Math.PI);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
+      const sx = s.x * pc.width, sy = s.y * pc.height, wx = w.x * pc.width, wy = w.y * pc.height;
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(wx, wy);
+      ctx.strokeStyle = (best_posture_frame.angle <= VERTICAL_ANGLE_THRESHOLD) ? '#4ade80' : '#f87171';
+      ctx.lineWidth = 6; ctx.stroke();
+      ctx.beginPath(); ctx.setLineDash([5, 5]); ctx.moveTo(sx, sy); ctx.lineTo(sx, wy);
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
     }
   }
 
-  // アドバイスの更新
-  const adviceText = document.getElementById('advice-text');
-  if (adviceText) {
-    if (!isVerticalOk) {
-      adviceText.innerText = "腕が垂直になっていないようです。肩の真下に手首がくるように意識しましょう。";
-    } else if (!isRhythmOk) {
-      adviceText.innerText = "リズムが少しずれています。メトロノームに合わせて一定のテンポで押しましょう。";
-    } else {
-      adviceText.innerText = "素晴らしい技術です！この調子で、いつでも実践できるようにしておきましょう。";
-    }
+  const advice = document.getElementById('advice-text');
+  if (advice) {
+    if (!isVerticalOk) advice.innerText = "腕が垂直になっていないようです。肩の真下に手首がくるように意識しましょう。";
+    else if (!isRhythmOk) advice.innerText = "リズムが少しずれています。1分間に100〜120回を意識しましょう。";
+    else advice.innerText = "素晴らしい技術です！この調子で練習を続けましょう。";
   }
 }
 
+// --- 8. イベントリスナー ---
+
 document.addEventListener('click', (e) => {
-  const targetId = e.target.closest('button')?.id || e.target.id;
-  if (!targetId) return;
-  switch (targetId) {
+  const tid = e.target.closest('button')?.id || e.target.id;
+  if (!tid) return;
+  switch (tid) {
     case 'btn-to-guide': isUploadedVideo = false; showScreen('guide'); break;
     case 'btn-to-measure': showScreen('measure'); break;
     case 'btn-back-to-intro':
@@ -395,6 +373,7 @@ document.addEventListener('click', (e) => {
     case 'btn-upload-trigger': if (inputVideoFile) inputVideoFile.click(); break;
   }
 });
-if (inputVideoFile) inputVideoFile.addEventListener('change', (e) => { const file = e.target.files[0]; if (file) startVideoFile(file); });
+
+if (inputVideoFile) inputVideoFile.addEventListener('change', (e) => { if (e.target.files[0]) startVideoFile(e.target.files[0]); });
 showScreen('intro');
 window.addEventListener('resize', () => { if (!isUploadedVideo && canvasElement) { canvasElement.width = canvasElement.clientWidth; canvasElement.height = canvasElement.clientHeight; } });
