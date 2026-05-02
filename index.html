@@ -284,6 +284,13 @@
             <span class="rank">◎</span>
             <p class="rank-text">素晴らしいです！</p>
           </div>
+          <!-- 姿勢チェック用の静止画表示エリア -->
+          <div id="posture-check-container" class="card shadow hidden" style="padding: 0; overflow: hidden; position: relative;">
+            <canvas id="posture-canvas" style="width: 100%; display: block;"></canvas>
+            <div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); padding: 0.4rem; font-size: 0.75rem; text-align: center;">
+              判定に使用したシーン（垂直度の確認）
+            </div>
+          </div>
           <div class="evaluation-details">
             <div class="eval-item">
               <span class="label">垂直押し</span>

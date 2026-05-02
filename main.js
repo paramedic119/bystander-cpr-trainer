@@ -7,7 +7,7 @@ const MEASURE_DURATION = 15;
 const TARGET_BPM_MIN = 70;  // 非常に寛容な設定 (実力があれば確実に合格)
 const TARGET_BPM_MAX = 150; 
 const METRONOME_BPM = 105;
-const VERTICAL_ANGLE_THRESHOLD = 60; // 真横視点での誤差を完全カバー
+const VERTICAL_ANGLE_THRESHOLD = 30; // 肩と手首の垂直度（遊び30度）
 const MIN_PEAK_INTERVAL = 400; 
 const SMOOTHING_FACTOR = 0.5;
 
@@ -23,6 +23,12 @@ let last_y = 0;
 let y_direction = 0;
 let smoothed_elbow = { x: 0, y: 0 };
 let smoothed_shoulder = { x: 0, y: 0 };
+let smoothed_wrist = { x: 0, y: 0 }; // 手首の平滑化座標を追加
+
+// 静止画キャプチャ用
+let best_posture_frame = null; 
+let max_wrist_y = 0;
+let shouldCaptureFrame = false; // フレーム保存フラグを追加
 
 // Web Audio API & Scheduler
 let audioCtx = null;
@@ -69,6 +75,9 @@ function resetMeasurementUI() {
   if (timerElement) timerElement.classList.add('hidden');
   if (bpmDisplayElement) { bpmDisplayElement.classList.add('hidden'); bpmDisplayElement.innerText = "-- BPM"; }
   if (countdownElement) countdownElement.classList.add('hidden');
+  document.getElementById('posture-check-container')?.classList.add('hidden'); // 静止画コンテナを隠す
+  max_wrist_y = 0;
+  best_posture_frame = null;
   ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('hidden', id === 'btn-stop');
@@ -146,6 +155,20 @@ function onResults(results) {
         window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
       }
       if (isMeasuring) analyzePose(results.poseLandmarks);
+      
+      // 代表フレームの保存（analyzePoseでフラグが立った場合）
+      if (shouldCaptureFrame && results.image) {
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = results.image.width;
+        offscreenCanvas.height = results.image.height;
+        const offscreenCtx = offscreenCanvas.getContext('2d');
+        offscreenCtx.drawImage(results.image, 0, 0);
+        best_posture_frame = {
+          image: offscreenCanvas,
+          landmarks: results.poseLandmarks
+        };
+        shouldCaptureFrame = false;
+      }
     }
     canvasCtx.restore();
   }
@@ -165,8 +188,25 @@ function analyzePose(landmarks) {
     smoothed_shoulder.y = (shoulder.y * SMOOTHING_FACTOR) + (smoothed_shoulder.y * (1 - SMOOTHING_FACTOR));
   }
   
-  const angle = Math.abs(Math.atan2(smoothed_elbow.x - smoothed_shoulder.x, smoothed_elbow.y - smoothed_shoulder.y) * 180 / Math.PI);
-  const current_y = smoothed_elbow.y;
+  const wrist = landmarks[15].visibility > landmarks[16].visibility ? landmarks[15] : landmarks[16];
+  if (smoothed_wrist.y === 0) {
+    smoothed_wrist = { x: wrist.x, y: wrist.y };
+  } else {
+    smoothed_wrist.x = (wrist.x * SMOOTHING_FACTOR) + (smoothed_wrist.x * (1 - SMOOTHING_FACTOR));
+    smoothed_wrist.y = (wrist.y * SMOOTHING_FACTOR) + (smoothed_wrist.y * (1 - SMOOTHING_FACTOR));
+  }
+  
+  // 肩と手首の角度を計算（垂直なら0度）
+  const angle = Math.abs(Math.atan2(smoothed_wrist.x - smoothed_shoulder.x, smoothed_wrist.y - smoothed_shoulder.y) * 180 / Math.PI);
+  const current_y = smoothed_wrist.y; // 手首の位置でリズムを判定
+
+  // 最も深く押し込んだ瞬間を代表フレームとして保存
+  if (current_y > max_wrist_y) {
+    max_wrist_y = current_y;
+    // 注：実際の画像データは onResults の results.image から取得する必要があるため、
+    // ここではフラグを立てて onResults 側で保存する。
+    shouldCaptureFrame = true;
+  }
   
   if (last_y !== 0) {
     const diff = current_y - last_y;
@@ -264,6 +304,66 @@ function calculateResult() {
     if (rankElement) rankElement.innerText = "○"; if (rankTextElement) rankTextElement.innerText = "あと一歩です！";
   } else {
     if (rankElement) rankElement.innerText = "△"; if (rankTextElement) rankTextElement.innerText = "練習あるのみ！";
+  }
+
+  // 静止画を描画
+  if (best_posture_frame) {
+    const postureCanvas = document.getElementById('posture-canvas');
+    const container = document.getElementById('posture-check-container');
+    if (postureCanvas && container) {
+      container.classList.remove('hidden');
+      const ctx = postureCanvas.getContext('2d');
+      postureCanvas.width = best_posture_frame.image.width;
+      postureCanvas.height = best_posture_frame.image.height;
+      ctx.drawImage(best_posture_frame.image, 0, 0);
+      
+      // ガイド線の描画
+      const lm = best_posture_frame.landmarks;
+      const s = lm[11].visibility > lm[12].visibility ? lm[11] : lm[12];
+      const w = lm[15].visibility > lm[16].visibility ? lm[15] : lm[16];
+      
+      const sx = s.x * postureCanvas.width;
+      const sy = s.y * postureCanvas.height;
+      const wx = w.x * postureCanvas.width;
+      const wy = w.y * postureCanvas.height;
+      
+      // 肩から手首への実線
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(wx, wy);
+      ctx.strokeStyle = isVerticalOk ? '#4ade80' : '#f87171';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      
+      // 垂直ガイドライン（点線）
+      ctx.beginPath();
+      ctx.setLineDash([5, 5]);
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx, wy);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 肩と手首のマーカー
+      ctx.beginPath();
+      ctx.arc(sx, sy, 8, 0, 2 * Math.PI);
+      ctx.arc(wx, wy, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+  }
+
+  // アドバイスの更新
+  const adviceText = document.getElementById('advice-text');
+  if (adviceText) {
+    if (!isVerticalOk) {
+      adviceText.innerText = "腕が垂直になっていないようです。肩の真下に手首がくるように意識しましょう。";
+    } else if (!isRhythmOk) {
+      adviceText.innerText = "リズムが少しずれています。メトロノームに合わせて一定のテンポで押しましょう。";
+    } else {
+      adviceText.innerText = "素晴らしい技術です！この調子で、いつでも実践できるようにしておきましょう。";
+    }
   }
 }
 
