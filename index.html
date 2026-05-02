@@ -201,14 +201,24 @@
         color: var(--primary-color); font-weight: bold;
       }
 
-      /* Results */
-      .rank { font-size: 4rem; display: block; line-height: 1; margin-bottom: 0.5rem; }
-      .rank-text { font-size: 1.2rem; color: var(--primary-color); font-weight: bold; margin-bottom: 1rem; }
-      .evaluation-details { width: 100%; margin-bottom: 1rem; }
-      .eval-item { display: flex; justify-content: space-between; padding: 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+      /* Results - 1画面に収めるためのコンパクト調整 */
+      #screen-result .content { justify-content: flex-start; padding-top: 0.5rem; }
+      .rank { font-size: 3rem; display: block; line-height: 1; margin-bottom: 0.2rem; }
+      .rank-text { font-size: 1rem; color: var(--primary-color); font-weight: bold; margin-bottom: 0.8rem; }
+      #posture-check-container { 
+        margin-bottom: 0.8rem; 
+        max-height: 25vh; 
+        display: flex;
+        flex-direction: column;
+      }
+      #posture-canvas { max-height: 20vh; object-fit: contain; background: #000; }
+      .evaluation-details { width: 100%; margin-bottom: 0.8rem; }
+      .eval-item { display: flex; justify-content: space-between; padding: 0.4rem 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); font-size: 0.9rem; }
+      .advice-card { padding: 0.8rem; border-radius: 0.8rem; margin-bottom: 1rem; }
+      .advice-card h3 { font-size: 0.85rem; margin-bottom: 0.2rem; }
+      #advice-text { font-size: 0.8rem; line-height: 1.4; }
       .status.pass { color: var(--primary-color); font-weight: bold; }
       .status.fail { color: var(--danger-color); font-weight: bold; }
-
       .hidden { display: none !important; }
     </style>
   </head>
