@@ -220,6 +220,50 @@
       .status.pass { color: var(--primary-color); font-weight: bold; }
       .status.fail { color: var(--danger-color); font-weight: bold; }
       .hidden { display: none !important; }
+
+      /* 水平器（レベラー）のスタイル */
+      #level-container {
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 160px; height: 160px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        pointer-events: none;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 5;
+        transition: border-color 0.3s;
+      }
+      #level-container.level-ok {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 15px var(--primary-color);
+      }
+      #level-line {
+        position: absolute;
+        width: 100%; height: 2px;
+        background: rgba(255, 255, 255, 0.5);
+        transition: transform 0.1s linear, background-color 0.3s;
+      }
+      #level-container.level-ok #level-line {
+        background-color: var(--primary-color);
+      }
+      #level-center {
+        width: 10px; height: 10px;
+        background: white;
+        border-radius: 50%;
+      }
+      .level-text {
+        position: absolute;
+        bottom: -25px;
+        font-size: 0.75rem;
+        color: white;
+        white-space: nowrap;
+        background: rgba(0,0,0,0.5);
+        padding: 2px 8px;
+        border-radius: 10px;
+      }
     </style>
   </head>
   <body>
@@ -272,6 +316,12 @@
             <div id="timer" class="hidden">00:15</div>
             <div id="current-bpm-display" class="hidden">-- BPM</div>
             <div id="metronome-visual" class="hidden"></div>
+            <!-- 水平器 -->
+            <div id="level-container">
+              <div id="level-line"></div>
+              <div id="level-center"></div>
+              <div class="level-text">カメラを垂直に</div>
+            </div>
             <div id="processing-overlay" class="hidden">解析中...</div>
           </div>
         </div>

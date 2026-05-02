@@ -356,14 +356,63 @@ function calculateResult() {
   }
 }
 
-// --- 8. イベントリスナー ---
+// --- 8. 水平器（ジャイロセンサー） ---
+let levelActive = false;
 
-document.addEventListener('click', (e) => {
+async function initLevelSensor() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS用の権限リクエスト
+    try {
+      const permission = await DeviceOrientationEvent.requestPermission();
+      if (permission === 'granted') startLevelMonitoring();
+    } catch (e) { log("Level sensor permission denied"); }
+  } else {
+    // Android/PC等
+    startLevelMonitoring();
+  }
+}
+
+function startLevelMonitoring() {
+  if (levelActive) return;
+  levelActive = true;
+  window.addEventListener('deviceorientation', (e) => {
+    if (!isMeasuring && screens.measure.classList.contains('active')) {
+      const levelLine = document.getElementById('level-line');
+      const levelContainer = document.getElementById('level-container');
+      if (!levelLine || !levelContainer) return;
+
+      // デバイスの回転角を取得（画面の向きを考慮）
+      let roll = 0;
+      if (window.innerHeight > window.innerWidth) {
+        roll = e.gamma; // 縦持ち
+      } else {
+        roll = e.beta; // 横持ち
+      }
+
+      // ガイド線を回転
+      levelLine.style.transform = `rotate(${roll}deg)`;
+
+      // ±3度以内なら「水平」とみなして緑色にする
+      if (Math.abs(roll) < 3) {
+        levelContainer.classList.add('level-ok');
+      } else {
+        levelContainer.classList.remove('level-ok');
+      }
+    }
+  });
+}
+
+// --- 9. イベントリスナー ---
+
+document.addEventListener('click', async (e) => {
   const tid = e.target.closest('button')?.id || e.target.id;
   if (!tid) return;
   switch (tid) {
     case 'btn-to-guide': isUploadedVideo = false; showScreen('guide'); break;
-    case 'btn-to-measure': showScreen('measure'); break;
+    case 'btn-to-measure': 
+      showScreen('measure'); 
+      initLevelSensor(); // 計測画面に進む際にセンサーを初期化
+      break;
     case 'btn-back-to-intro':
     case 'btn-back-to-intro-from-measure': showScreen('intro'); break;
     case 'btn-start': startMeasurement(); break;
