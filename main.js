@@ -71,6 +71,12 @@ function resetUI() {
   if (bpmDisplayElement) bpmDisplayElement.innerText = "-- BPM";
   document.getElementById('posture-check-container')?.classList.add('hidden');
   
+  // 動画読み込み時は水平器を隠す
+  const levelContainer = document.getElementById('level-container');
+  if (levelContainer) {
+    levelContainer.classList.toggle('hidden', isUploadedVideo);
+  }
+  
   ['btn-start', 'btn-stop', 'btn-switch-camera', 'btn-back-to-intro-from-measure'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('hidden', id === 'btn-stop');
