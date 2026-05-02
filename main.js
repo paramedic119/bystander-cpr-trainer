@@ -7,7 +7,7 @@ const MEASURE_DURATION = 15;
 const TARGET_BPM_MIN = 70;  // 非常に寛容な設定 (実力があれば確実に合格)
 const TARGET_BPM_MAX = 150; 
 const METRONOME_BPM = 105;
-const VERTICAL_ANGLE_THRESHOLD = 30; // 肩と手首の垂直度（遊び30度）
+const VERTICAL_ANGLE_THRESHOLD = 20; // 閾値を20度に厳格化
 const MIN_PEAK_INTERVAL = 400; 
 const SMOOTHING_FACTOR = 0.5;
 
@@ -154,7 +154,7 @@ function onResults(results) {
         window.drawConnectors(canvasCtx, results.poseLandmarks, [[11, 13], [13, 15], [12, 14], [14, 16], [11, 12], [11, 23], [12, 24], [23, 24]], { color: '#ffffff', lineWidth: 4 });
         window.drawLandmarks(canvasCtx, [results.poseLandmarks[11], results.poseLandmarks[12], results.poseLandmarks[13], results.poseLandmarks[14], results.poseLandmarks[15], results.poseLandmarks[16]], { color: '#4ade80', lineWidth: 2, radius: 8 });
       }
-      if (isMeasuring) analyzePose(results.poseLandmarks);
+      if (isMeasuring) analyzePose(results.poseLandmarks, results.image.width, results.image.height);
       
       // 代表フレームの保存（analyzePoseでフラグが立った場合）
       if (shouldCaptureFrame && results.image) {
@@ -165,7 +165,8 @@ function onResults(results) {
         offscreenCtx.drawImage(results.image, 0, 0);
         best_posture_frame = {
           image: offscreenCanvas,
-          landmarks: results.poseLandmarks
+          landmarks: results.poseLandmarks,
+          angle: last_calculated_angle // その瞬間の角度を保存
         };
         shouldCaptureFrame = false;
       }
@@ -174,7 +175,9 @@ function onResults(results) {
   }
 }
 
-function analyzePose(landmarks) {
+let last_calculated_angle = 0; // 最新の計算角度を保持する変数
+
+function analyzePose(landmarks, width, height) {
   const elbow = landmarks[13].visibility > landmarks[14].visibility ? landmarks[13] : landmarks[14];
   const shoulder = landmarks[11].visibility > landmarks[12].visibility ? landmarks[11] : landmarks[12];
   
@@ -197,7 +200,12 @@ function analyzePose(landmarks) {
   }
   
   // 肩と手首の角度を計算（垂直なら0度）
-  const angle = Math.abs(Math.atan2(smoothed_wrist.x - smoothed_shoulder.x, smoothed_wrist.y - smoothed_shoulder.y) * 180 / Math.PI);
+  // 画面のアスペクト比を考慮するため、ピクセル単位の差分で計算
+  const dx = (smoothed_wrist.x - smoothed_shoulder.x) * width;
+  const dy = (smoothed_wrist.y - smoothed_shoulder.y) * height;
+  const angle = Math.abs(Math.atan2(dx, dy) * 180 / Math.PI);
+  last_calculated_angle = angle;
+  
   const current_y = smoothed_wrist.y; // 手首の位置でリズムを判定
 
   // 最も深く押し込んだ瞬間を代表フレームとして保存
@@ -291,7 +299,10 @@ function calculateResult() {
   const isRhythmOk = medianBPM >= TARGET_BPM_MIN && medianBPM <= TARGET_BPM_MAX;
   const angles = results_history.map(h => h.angle);
   const medianAngle = getMedian(angles);
-  const isVerticalOk = medianAngle <= VERTICAL_ANGLE_THRESHOLD;
+  
+  // 判定ロジックの強化：中央値が閾値内、かつ最深部の角度も閾値内であることを条件とする
+  const peakAngle = best_posture_frame ? best_posture_frame.angle : medianAngle;
+  const isVerticalOk = (medianAngle <= VERTICAL_ANGLE_THRESHOLD) && (peakAngle <= VERTICAL_ANGLE_THRESHOLD);
   
   const rankElement = document.querySelector('.rank'), rankTextElement = document.querySelector('.rank-text'), evalVertical = document.getElementById('eval-vertical'), evalRhythm = document.getElementById('eval-rhythm');
   if (evalVertical) { evalVertical.innerText = isVerticalOk ? "合格" : "もう少し！"; evalVertical.className = `status ${isVerticalOk ? 'pass' : 'fail'}`; }
@@ -331,7 +342,9 @@ function calculateResult() {
       ctx.beginPath();
       ctx.moveTo(sx, sy);
       ctx.lineTo(wx, wy);
-      ctx.strokeStyle = isVerticalOk ? '#4ade80' : '#f87171';
+      // このフレーム単体の角度で色を決定（見た目と一致させる）
+      const frameVerticalOk = best_posture_frame.angle <= VERTICAL_ANGLE_THRESHOLD;
+      ctx.strokeStyle = frameVerticalOk ? '#4ade80' : '#f87171';
       ctx.lineWidth = 6;
       ctx.stroke();
       
